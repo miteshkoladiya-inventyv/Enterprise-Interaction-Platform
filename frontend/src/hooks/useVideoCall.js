@@ -1,0 +1,430 @@
+import { useState, useRef, useEffect, useCallback } from "react";
+import { requestMediaPermissions, PermissionDeniedError } from "./useMediaPermissions";
+
+const ICE_SERVERS = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+  ],
+};
+
+/**
+ * Video call hook for one-to-one video calls
+ * @param {object} socket - Socket.IO client (same as chat)
+ * @param {string} currentUserId - Current user id
+ * @param {string} currentUserName - Current user display name
+ * @param { (toUserId: string) => Promise<void> } requestCallApi - HTTP request to trigger incoming call on server
+ */
+export function useVideoCall(socket, currentUserId, currentUserName, requestCallApi) {
+  const [callState, setCallState] = useState("idle"); // idle | calling | incoming | connecting | active | ended
+  const [remoteUser, setRemoteUser] = useState(null); // { id, name }
+  const [localStream, setLocalStream] = useState(null);
+  const [remoteStream, setRemoteStream] = useState(null);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isVideoOff, setIsVideoOff] = useState(false);
+  const [errorMessage, setErrorMessage] = useState(null);
+
+  const peerConnectionRef = useRef(null);
+  const localStreamRef = useRef(null);
+  const isCallerRef = useRef(false);
+  const callingTimeoutRef = useRef(null);
+
+  const cleanup = useCallback(() => {
+    if (callingTimeoutRef.current) {
+      clearTimeout(callingTimeoutRef.current);
+      callingTimeoutRef.current = null;
+    }
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((t) => t.stop());
+      localStreamRef.current = null;
+    }
+    setLocalStream(null);
+    setRemoteStream(null);
+    setCallState("idle");
+    setRemoteUser(null);
+    setErrorMessage(null);
+    setIsMuted(false);
+    setIsVideoOff(false);
+    isCallerRef.current = false;
+  }, []);
+
+  const endCall = useCallback(() => {
+    const remoteId = remoteUser?.id?.toString?.() ?? remoteUser?.id;
+    console.log("[VIDEO_CALL] endCall: hanging up", { toUserId: remoteId });
+    if (callingTimeoutRef.current) {
+      clearTimeout(callingTimeoutRef.current);
+      callingTimeoutRef.current = null;
+    }
+    if (remoteId && socket?.connected) {
+      socket.emit("video-call-end", { toUserId: remoteId });
+    }
+    cleanup();
+  }, [remoteUser?.id, socket, cleanup]);
+
+  const toggleMute = useCallback(() => {
+    if (!localStreamRef.current) return;
+    const audioTrack = localStreamRef.current.getAudioTracks()[0];
+    if (audioTrack) {
+      audioTrack.enabled = isMuted;
+      setIsMuted(!isMuted);
+    }
+  }, [isMuted]);
+
+  const toggleVideo = useCallback(() => {
+    if (!localStreamRef.current) return;
+    const videoTrack = localStreamRef.current.getVideoTracks()[0];
+    if (videoTrack) {
+      videoTrack.enabled = isVideoOff;
+      setIsVideoOff(!isVideoOff);
+    }
+  }, [isVideoOff]);
+
+  const startCall = useCallback(
+    async (remoteUserId, remoteUserName) => {
+      const toId = remoteUserId != null ? String(remoteUserId) : remoteUserId;
+      console.log("[VIDEO_CALL] startCall: sending call request via HTTP", { currentUserId, toUserId: toId, remoteUserName });
+      if (!currentUserId || !toId) {
+        console.log("[VIDEO_CALL] startCall: abort - missing currentUserId or toUserId");
+        return;
+      }
+      if (!requestCallApi) {
+        console.error("[VIDEO_CALL] startCall: requestCallApi not provided");
+        setErrorMessage("Call not configured");
+        return;
+      }
+
+      // Request camera and microphone permission BEFORE initiating the call
+      try {
+        const stream = await requestMediaPermissions({ audio: true, video: true });
+        // Stop the stream immediately — we only needed it to secure permission.
+        // The actual stream will be created when the callee accepts.
+        stream.getTracks().forEach((t) => t.stop());
+      } catch (err) {
+        console.error("[VIDEO_CALL] startCall: camera/microphone permission denied", err);
+        setErrorMessage(err instanceof PermissionDeniedError ? err.message : "Camera/microphone access denied");
+        return;
+      }
+
+      if (callingTimeoutRef.current) {
+        clearTimeout(callingTimeoutRef.current);
+        callingTimeoutRef.current = null;
+      }
+      setRemoteUser({ id: toId, name: remoteUserName || "User" });
+      setCallState("calling");
+      setErrorMessage(null);
+      isCallerRef.current = true;
+
+      try {
+        await requestCallApi(toId);
+        console.log("[VIDEO_CALL] startCall: server accepted, waiting for answer");
+      } catch (err) {
+        console.error("[VIDEO_CALL] startCall: request failed", err);
+        isCallerRef.current = false;
+        setCallState("idle");
+        setRemoteUser(null);
+        setErrorMessage(err.response?.data?.message || err.response?.data?.error || "User unavailable");
+        return;
+      }
+
+      callingTimeoutRef.current = setTimeout(() => {
+        if (isCallerRef.current) {
+          setErrorMessage("No answer");
+          endCall();
+        }
+        callingTimeoutRef.current = null;
+      }, 45000);
+    },
+    [currentUserId, endCall, requestCallApi]
+  );
+
+  const rejectCall = useCallback(() => {
+    const remoteId = remoteUser?.id?.toString?.() ?? remoteUser?.id;
+    console.log("[VIDEO_CALL] rejectCall: declining", { toUserId: remoteId });
+    if (remoteId && socket?.connected) {
+      socket.emit("video-call-reject", { toUserId: remoteId });
+    }
+    setCallState("idle");
+    setRemoteUser(null);
+  }, [remoteUser?.id, socket]);
+
+  const acceptCall = useCallback(async () => {
+    const remoteId = remoteUser?.id?.toString?.() ?? remoteUser?.id;
+    console.log("[VIDEO_CALL] acceptCall: callee accepting", { remoteUserId: remoteId, socketConnected: !!socket?.connected });
+    if (!remoteId || !socket?.connected || !currentUserId) {
+      console.log("[VIDEO_CALL] acceptCall: abort - missing remoteId/socket/currentUserId");
+      return;
+    }
+
+    // Request camera and microphone permission FIRST, before changing state
+    let stream;
+    try {
+      console.log("[VIDEO_CALL] acceptCall: requesting camera and microphone permission");
+      stream = await requestMediaPermissions({ audio: true, video: true });
+    } catch (err) {
+      console.error("[VIDEO_CALL] acceptCall: camera/microphone permission denied", err);
+      setErrorMessage(err instanceof PermissionDeniedError ? err.message : "Camera/microphone access denied");
+      // Stay on "incoming" so user can retry or decline
+      setCallState("incoming");
+      return;
+    }
+
+    setCallState("connecting");
+    setErrorMessage(null);
+
+    try {
+      localStreamRef.current = stream;
+      setLocalStream(stream);
+
+      console.log("[VIDEO_CALL] acceptCall: creating RTCPeerConnection (callee), waiting for offer");
+      const pc = new RTCPeerConnection(ICE_SERVERS);
+      peerConnectionRef.current = pc;
+
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+      pc.ontrack = (e) => {
+        console.log("[VIDEO_CALL] callee ontrack - remote stream received");
+        if (e.streams?.[0]) {
+          setRemoteStream(e.streams[0]);
+          setCallState("active");
+        }
+      };
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate && socket?.connected) {
+          console.log("[VIDEO_CALL] callee sending ICE candidate to", remoteId);
+          socket.emit("video-webrtc-ice", {
+            toUserId: remoteId,
+            candidate: e.candidate,
+          });
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        console.log("[VIDEO_CALL] callee connectionState:", pc.connectionState);
+        if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+          setErrorMessage("Connection lost");
+        }
+        if (pc.connectionState === "closed") {
+          cleanup();
+        }
+      };
+
+      console.log("[VIDEO_CALL] acceptCall: emitting video-call-accept to", remoteId);
+      socket.emit("video-call-accept", { toUserId: remoteId });
+    } catch (err) {
+      console.error("[VIDEO_CALL] acceptCall error:", err);
+      setErrorMessage("Failed to set up video connection");
+      setCallState("incoming");
+    }
+  }, [remoteUser?.id, socket, currentUserId, endCall, cleanup]);
+
+  useEffect(() => {
+    if (!socket || !currentUserId) return;
+
+    const handleIncomingCall = (data) => {
+      const { fromUserId, fromUserName } = data;
+      const fromId = fromUserId?.toString?.() ?? fromUserId;
+      console.log("[VIDEO_CALL] received incoming-video-call", { fromUserId: fromId, fromUserName, callState });
+      if (callState !== "idle") {
+        console.log("[VIDEO_CALL] incoming call ignored - not idle, callState=", callState);
+        return;
+      }
+      setRemoteUser({ id: fromId, name: fromUserName || "Someone" });
+      setCallState("incoming");
+    };
+
+    const handleCallAccepted = async (data) => {
+      const fromIdStr = data.fromUserId?.toString?.() ?? data.fromUserId;
+      const remoteIdStr = remoteUser?.id?.toString?.() ?? remoteUser?.id;
+      console.log("[VIDEO_CALL] caller received call-accepted", { fromUserId: fromIdStr, remoteUserIds: remoteIdStr, isCaller: isCallerRef.current });
+      if (fromIdStr !== remoteIdStr || !isCallerRef.current) {
+        console.log("[VIDEO_CALL] call-accepted ignored - fromId !== remoteId or not caller");
+        return;
+      }
+      if (callingTimeoutRef.current) {
+        clearTimeout(callingTimeoutRef.current);
+        callingTimeoutRef.current = null;
+      }
+      setCallState("connecting");
+
+      try {
+        console.log("[VIDEO_CALL] caller: requesting camera and microphone permission");
+        const stream = await requestMediaPermissions({ audio: true, video: true });
+        localStreamRef.current = stream;
+        setLocalStream(stream);
+
+        console.log("[VIDEO_CALL] caller: creating RTCPeerConnection and creating offer");
+        const pc = new RTCPeerConnection(ICE_SERVERS);
+        peerConnectionRef.current = pc;
+
+        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+        pc.ontrack = (e) => {
+          console.log("[VIDEO_CALL] caller ontrack - remote stream received");
+          if (e.streams?.[0]) {
+            setRemoteStream(e.streams[0]);
+            setCallState("active");
+          }
+        };
+
+        pc.onicecandidate = (e) => {
+          if (e.candidate && socket?.connected) {
+            console.log("[VIDEO_CALL] caller sending ICE candidate to", fromIdStr);
+            socket.emit("video-webrtc-ice", {
+              toUserId: fromIdStr,
+              candidate: e.candidate,
+            });
+          }
+        };
+
+        pc.onconnectionstatechange = () => {
+          console.log("[VIDEO_CALL] caller connectionState:", pc.connectionState);
+          if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+            setErrorMessage("Connection lost");
+          }
+          if (pc.connectionState === "closed") {
+            cleanup();
+          }
+        };
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        console.log("[VIDEO_CALL] caller: sending video-webrtc-offer to", fromIdStr);
+        socket.emit("video-webrtc-offer", {
+          toUserId: fromIdStr,
+          sdp: pc.localDescription,
+        });
+      } catch (err) {
+        console.error("[VIDEO_CALL] caller handleCallAccepted error:", err);
+        setErrorMessage(err instanceof PermissionDeniedError ? err.message : "Failed to start video");
+        endCall();
+      }
+    };
+
+    const handleCallRejected = (data) => {
+      const fromIdStr = data.fromUserId?.toString?.() ?? data.fromUserId;
+      const remoteIdStr = remoteUser?.id?.toString?.() ?? remoteUser?.id;
+      if (fromIdStr === remoteIdStr) {
+        if (callingTimeoutRef.current) {
+          clearTimeout(callingTimeoutRef.current);
+          callingTimeoutRef.current = null;
+        }
+        setCallState("idle");
+        setRemoteUser(null);
+        setErrorMessage("Call declined");
+      }
+    };
+
+    const handleWebrtcOffer = async (data) => {
+      const pc = peerConnectionRef.current;
+      const fromIdStr = data.fromUserId?.toString?.() ?? data.fromUserId;
+      const remoteIdStr = remoteUser?.id?.toString?.() ?? remoteUser?.id;
+      console.log("[VIDEO_CALL] callee received video-webrtc-offer", { fromUserId: fromIdStr, remoteUserId: remoteIdStr, hasPc: !!pc });
+      if (!pc || fromIdStr !== remoteIdStr) {
+        console.log("[VIDEO_CALL] video-webrtc-offer ignored - no pc or fromId !== remoteId");
+        return;
+      }
+      try {
+        console.log("[VIDEO_CALL] callee: setRemoteDescription(offer), createAnswer, sending answer");
+        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        if (socket?.connected) {
+          socket.emit("video-webrtc-answer", {
+            toUserId: fromIdStr,
+            sdp: pc.localDescription,
+          });
+          console.log("[VIDEO_CALL] callee: emitted video-webrtc-answer to", fromIdStr);
+        }
+      } catch (err) {
+        console.error("[VIDEO_CALL] callee handleWebrtcOffer error:", err);
+        setErrorMessage("Failed to connect");
+        endCall();
+      }
+    };
+
+    const handleWebrtcAnswer = async (data) => {
+      const pc = peerConnectionRef.current;
+      const fromIdStr = data.fromUserId?.toString?.() ?? data.fromUserId;
+      const remoteIdStr = remoteUser?.id?.toString?.() ?? remoteUser?.id;
+      console.log("[VIDEO_CALL] caller received video-webrtc-answer", { fromUserId: fromIdStr, remoteUserId: remoteIdStr, hasPc: !!pc });
+      if (!pc || fromIdStr !== remoteIdStr) {
+        console.log("[VIDEO_CALL] video-webrtc-answer ignored - no pc or fromId !== remoteId");
+        return;
+      }
+      try {
+        console.log("[VIDEO_CALL] caller: setRemoteDescription(answer)");
+        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+      } catch (err) {
+        console.error("[VIDEO_CALL] caller setRemoteDescription(answer) error:", err);
+      }
+    };
+
+    const handleWebrtcIce = async (data) => {
+      const pc = peerConnectionRef.current;
+      console.log("[VIDEO_CALL] received video-webrtc-ice", { fromUserId: data.fromUserId, hasPc: !!pc, hasCandidate: !!data.candidate });
+      if (!pc || !data.candidate) return;
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+        console.log("[VIDEO_CALL] addIceCandidate success");
+      } catch (err) {
+        console.error("[VIDEO_CALL] addIceCandidate error:", err);
+      }
+    };
+
+    const handleCallEnded = (data) => {
+      const fromIdStr = data.fromUserId?.toString?.() ?? data.fromUserId;
+      const remoteIdStr = remoteUser?.id?.toString?.() ?? remoteUser?.id;
+      if (fromIdStr === remoteIdStr) {
+        console.log("[VIDEO_CALL] call-ended from remote, cleaning up");
+        cleanup();
+      }
+    };
+
+    socket.on("incoming-video-call", handleIncomingCall);
+    socket.on("video-call-accepted", handleCallAccepted);
+    socket.on("video-call-rejected", handleCallRejected);
+    socket.on("video-webrtc-offer", handleWebrtcOffer);
+    socket.on("video-webrtc-answer", handleWebrtcAnswer);
+    socket.on("video-webrtc-ice", handleWebrtcIce);
+    socket.on("video-call-ended", handleCallEnded);
+
+    return () => {
+      socket.off("incoming-video-call", handleIncomingCall);
+      socket.off("video-call-accepted", handleCallAccepted);
+      socket.off("video-call-rejected", handleCallRejected);
+      socket.off("video-webrtc-offer", handleWebrtcOffer);
+      socket.off("video-webrtc-answer", handleWebrtcAnswer);
+      socket.off("video-webrtc-ice", handleWebrtcIce);
+      socket.off("video-call-ended", handleCallEnded);
+    };
+  }, [
+    socket,
+    currentUserId,
+    remoteUser?.id,
+    callState,
+    cleanup,
+    endCall,
+  ]);
+
+  return {
+    callState,
+    remoteUser,
+    localStream,
+    remoteStream,
+    isMuted,
+    isVideoOff,
+    errorMessage,
+    startCall,
+    acceptCall,
+    rejectCall,
+    endCall,
+    toggleMute,
+    toggleVideo,
+    cleanup,
+  };
+}
