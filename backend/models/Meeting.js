@@ -36,6 +36,21 @@ const meetingSchema = new Schema(
     scheduled_at: {
       type: Date,
     },
+    scheduled_timezone: {
+      type: String,
+      default: "UTC",
+      trim: true,
+    },
+    host_country: {
+      type: String,
+      enum: ["germany", "india", "usa"],
+      default: null,
+    },
+    host_timezone: {
+      type: String,
+      default: "UTC",
+      trim: true,
+    },
     duration_minutes: {
       type: Number,
       default: 30,
@@ -53,6 +68,10 @@ const meetingSchema = new Schema(
       default: "scheduled",
     },
     recording_enabled: {
+      type: Boolean,
+      default: false,
+    },
+    regional_compliance_ack: {
       type: Boolean,
       default: false,
     },

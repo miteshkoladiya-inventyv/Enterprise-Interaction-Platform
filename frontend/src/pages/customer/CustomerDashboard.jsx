@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import axios from "axios";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import MeetingModule from "@/components/MeetingModule";
-import WhiteboardModule from "@/components/WhiteboardModule";
 import FloatingMeetingBar from "@/components/FloatingMeetingBar";
 
 import {
@@ -25,7 +24,6 @@ import {
   Video,
   Eye,
   EyeOff,
-  PenLine,
 } from "lucide-react";
 import { toast } from "sonner";
 import { BACKEND_URL } from "@/config";
@@ -83,7 +81,6 @@ export default function CustomerDashboard() {
   const [searchParams] = useSearchParams();
   const { user, socket } = useAuthContext();
   const [showMeeting, setShowMeeting] = useState(false);
-  const [showWhiteboard, setShowWhiteboard] = useState(false);
   const [activeView, setActiveView] = useState("tickets");
   const [activeMeetingInfo, setActiveMeetingInfo] = useState(null);
   const [tickets, setTickets] = useState([]);
@@ -96,26 +93,38 @@ export default function CustomerDashboard() {
   const [creating, setCreating] = useState(false);
   const [showResolved, setShowResolved] = useState(false);
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [showSatisfactionForm, setShowSatisfactionForm] = useState(false);
+  const [satisfactionForm, setSatisfactionForm] = useState({ rating: 5, comment: "" });
   const [ticketForm, setTicketForm] = useState({
     title: "",
     description: "",
     category: "",
+    urgency_level: 2,
+    subscription_tier: "pro",
   });
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const token = localStorage.getItem("token");
-  const headers = { Authorization: `Bearer ${token}` };
+  const headers = token && token !== "undefined" && token !== "null"
+    ? { Authorization: `Bearer ${token}` }
+    : {};
 
   const fetchTickets = useCallback(async () => {
+    if (!token) return; // Skip if no token
     try {
       const res = await axios.get(`${BACKEND_URL}/tickets/my-tickets`, { headers });
       setTickets(res.data.tickets);
     } catch (err) {
       console.error("Fetch tickets error:", err);
+      if (err.response?.status === 401) {
+        // Token is invalid, clear it
+        localStorage.removeItem("token");
+        localStorage.removeItem("customerData");
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [token, headers]);
 
   const fetchMessages = useCallback(async (ticketId) => {
     try {
@@ -125,6 +134,14 @@ export default function CustomerDashboard() {
       console.error("Fetch messages error:", err);
     }
   }, []);
+
+  // Check if token exists and is valid
+  useEffect(() => {
+    if (!token || token === "undefined" || token === "null") {
+      // No valid token, redirect to login
+      navigate("/customer/login", { replace: true });
+    }
+  }, [token, navigate]);
 
   useEffect(() => {
     fetchTickets();
@@ -167,8 +184,14 @@ export default function CustomerDashboard() {
     setCreating(true);
     try {
       const res = await axios.post(`${BACKEND_URL}/tickets`, ticketForm, { headers });
-      toast.success("Ticket created successfully");
-      setTicketForm({ title: "", description: "", category: "" });
+      toast.success("Ticket created successfully - auto-assigned to an agent");
+      setTicketForm({ 
+        title: "", 
+        description: "", 
+        category: "",
+        urgency_level: 2,
+        subscription_tier: "pro",
+      });
       setShowCreateForm(false);
       fetchTickets();
       setSelectedTicket(res.data.ticket);
@@ -177,6 +200,23 @@ export default function CustomerDashboard() {
       toast.error(err.response?.data?.error || "Failed to create ticket");
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleSubmitSatisfaction = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await axios.post(
+        `${BACKEND_URL}/tickets/${selectedTicket._id}/satisfaction`,
+        satisfactionForm,
+        { headers }
+      );
+      toast.success("Thank you for your feedback!");
+      setSelectedTicket(res.data.ticket);
+      setShowSatisfactionForm(false);
+      setSatisfactionForm({ rating: 5, comment: "" });
+    } catch (err) {
+      toast.error("Failed to submit rating");
     }
   };
 
@@ -260,23 +300,7 @@ export default function CustomerDashboard() {
     (t) => t.status === "resolved" || t.status === "closed"
   ).length;
 
-if (showWhiteboard) {
-    return (
-      <div className="h-screen flex flex-col bg-background">
-        <div className="h-12 border-b flex items-center px-4 gap-3 bg-white dark:bg-zinc-950 flex-shrink-0">
-          <Button variant="ghost" size="sm" onClick={() => { setShowWhiteboard(false); navigate("/customer/dashboard", { replace: true }); }}>
-            <ChevronLeft className="h-4 w-4 mr-1" /> Back to Support
-          </Button>
-          <span className="text-sm font-medium text-muted-foreground">Whiteboard</span>
-        </div>
-        <div className="flex-1 overflow-hidden">
-          <WhiteboardModule />
-        </div>
-      </div>
-    );
-  }
-
-  if (showMeeting) {
+if (showMeeting) {
     return (
       <div className="h-screen flex flex-col bg-background">
         <div className="h-12 border-b flex items-center px-4 gap-3 bg-white dark:bg-zinc-950 flex-shrink-0">
@@ -327,14 +351,6 @@ if (showWhiteboard) {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setShowWhiteboard(true)}
-            title="Whiteboard"
-          >
-            <PenLine className="h-4 w-4" />
-          </Button>
           <span className="text-sm text-muted-foreground">
 
             {user?.first_name} {user?.last_name}
@@ -521,6 +537,35 @@ if (showWhiteboard) {
                       }
                     />
                   </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="urgency">How urgent is this issue?</Label>
+                    <div className="space-y-1.5">
+                      {[
+                        { value: 1, label: "Low - Minor inconvenience, no business impact" },
+                        { value: 2, label: "Medium - Affecting some operations" },
+                        { value: 3, label: "High - Significant business impact" },
+                        { value: 4, label: "Critical - Major operations affected" },
+                        { value: 5, label: "Emergency - System completely down" },
+                      ].map((opt) => (
+                        <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="urgency"
+                            value={opt.value}
+                            checked={ticketForm.urgency_level === opt.value}
+                            onChange={(e) =>
+                              setTicketForm({
+                                ...ticketForm,
+                                urgency_level: parseInt(e.target.value),
+                              })
+                            }
+                            className="rounded"
+                          />
+                          <span className="text-sm text-muted-foreground">{opt.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
                   <div className="flex gap-3 pt-2">
                     <Button
                       type="button"
@@ -569,6 +614,13 @@ if (showWhiteboard) {
                     >
                       {selectedTicket.status.replace("_", " ")}
                     </span>
+                    <span
+                      className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                        priorityColors[selectedTicket.priority]
+                      }`}
+                    >
+                      {selectedTicket.priority}
+                    </span>
                   </div>
                 </div>
                 {selectedTicket.status !== "resolved" &&
@@ -583,8 +635,9 @@ if (showWhiteboard) {
                             { status: "resolved" },
                             { headers }
                           );
-                          toast.success("Ticket resolved!");
+                          toast.success("Ticket resolved! Please rate your experience.");
                           setSelectedTicket({ ...selectedTicket, status: "resolved" });
+                          setShowSatisfactionForm(true);
                           fetchTickets();
                         } catch {
                           toast.error("Failed to resolve");
@@ -776,11 +829,66 @@ if (showWhiteboard) {
                     <p className="text-sm">Waiting for an agent to be assigned...</p>
                   </div>
                 </div>
+              ) : showSatisfactionForm && selectedTicket.status === "resolved" ? (
+                <div className="p-4 border-t bg-blue-50 dark:bg-blue-900/20">
+                  <div className="flex items-center justify-center mb-4">
+                    <h3 className="font-semibold text-sm">How was your experience?</h3>
+                  </div>
+                  <form onSubmit={handleSubmitSatisfaction} className="space-y-3">
+                    <div className="flex justify-center gap-2">
+                      {[1, 2, 3, 4, 5].map((rating) => (
+                        <button
+                          key={rating}
+                          type="button"
+                          onClick={() => setSatisfactionForm({ ...satisfactionForm, rating })}
+                          className={`text-2xl transition-transform hover:scale-125 ${
+                            satisfactionForm.rating >= rating ? "opacity-100" : "opacity-30"
+                          }`}
+                        >
+                          ⭐
+                        </button>
+                      ))}
+                    </div>
+                    <textarea
+                      placeholder="Any additional comments? (optional)"
+                      value={satisfactionForm.comment}
+                      onChange={(e) =>
+                        setSatisfactionForm({ ...satisfactionForm, comment: e.target.value })
+                      }
+                      rows={2}
+                      className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-none"
+                    />
+                    <div className="flex gap-2 justify-end">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setShowSatisfactionForm(false)}
+                      >
+                        Skip
+                      </Button>
+                      <Button
+                        type="submit"
+                        size="sm"
+                        className="bg-blue-600 hover:bg-blue-700"
+                      >
+                        Submit Feedback
+                      </Button>
+                    </div>
+                  </form>
+                </div>
               ) : (
                 <div className="p-4 border-t bg-green-50 dark:bg-green-900/20 text-center">
                   <div className="flex items-center justify-center gap-2 text-green-700 dark:text-green-400">
                     <CheckCircle2 className="h-4 w-4" />
-                    <p className="text-sm">This ticket has been resolved.</p>
+                    <div>
+                      <p className="text-sm font-medium">This ticket has been resolved.</p>
+                      {selectedTicket.satisfaction_rating && (
+                        <p className="text-xs text-green-600 dark:text-green-300 mt-1">
+                          You rated this ticket {selectedTicket.satisfaction_rating}⭐
+                        </p>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}

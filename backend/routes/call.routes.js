@@ -7,6 +7,7 @@ import {
   getGroupCallStatus,
   joinGroupCall,
   leaveGroupCall,
+  inviteToCall,
 } from "../controllers/call/call.controller.js";
 import { verifyToken } from "../middlewares/auth.middleware.js";
 
@@ -15,6 +16,7 @@ const router = express.Router();
 router.get("/online/:userId", verifyToken, checkUserOnline);
 router.get("/status/:userId", verifyToken, checkUserCallStatus);
 router.post("/request", verifyToken, requestCall);
+router.post("/invite", verifyToken, inviteToCall);
 
 router.post("/group/start", verifyToken, startGroupCall);
 router.get("/group/status/:channelId", verifyToken, getGroupCallStatus);

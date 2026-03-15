@@ -1,6 +1,11 @@
 import Meeting from "../../models/Meeting.js";
 import { scheduleRemindersForMeeting, clearRemindersForMeeting } from "../../services/meetingReminderService.js";
 import { broadcastMeetingEvent } from "../../socket/socketServer.js";
+import {
+  applyMeetingCountryPolicies,
+  buildMeetingCollaborationContext,
+  convertScheduledLocalToUtc,
+} from "../../utils/crossCountryCollaboration.js";
 
 function generateMeetingCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -23,6 +28,20 @@ async function ensureUniqueMeetingCode() {
   return `MTG-${Date.now()}`;
 }
 
+async function populateMeetingResponse(meetingId) {
+  const meeting = await Meeting.findById(meetingId)
+    .populate("host_id", "first_name last_name email country timezone user_type")
+    .populate("participants", "first_name last_name email country timezone user_type")
+    .lean();
+
+  if (!meeting) return null;
+
+  return {
+    ...meeting,
+    cross_country_context: buildMeetingCollaborationContext(meeting),
+  };
+}
+
 export const createMeeting = async (req, res) => {
   try {
     const userId = req.userId;
@@ -37,6 +56,9 @@ export const createMeeting = async (req, res) => {
       description,
       meeting_type,
       scheduled_at,
+      scheduled_date,
+      scheduled_time,
+      scheduled_timezone,
       duration_minutes,
       participants = [],
       recording_enabled,
@@ -45,13 +67,27 @@ export const createMeeting = async (req, res) => {
       join_link,
       reminders = [],
       open_to_everyone = true,
+      regional_compliance_ack = false,
     } = req.body;
 
     if (!title || !meeting_type) {
       return res.status(400).json({ error: "title and meeting_type are required" });
     }
 
+    const effectiveTimeZone = scheduled_timezone || req.user?.timezone || "UTC";
+    const resolvedScheduledAt = scheduled_date && scheduled_time
+      ? convertScheduledLocalToUtc(scheduled_date, scheduled_time, effectiveTimeZone)
+      : scheduled_at
+        ? new Date(scheduled_at)
+        : null;
+
     const meetingCode = await ensureUniqueMeetingCode();
+    const policyDecision = applyMeetingCountryPolicies({
+      hostCountry: req.user?.country || null,
+      requestedRecordingEnabled: recording_enabled,
+      requestedOpenToEveryone: open_to_everyone,
+      complianceApproved: regional_compliance_ack,
+    });
 
     const meeting = new Meeting({
       meeting_code: meetingCode,
@@ -59,28 +95,36 @@ export const createMeeting = async (req, res) => {
       description,
       host_id: userId,
       meeting_type,
-      scheduled_at: scheduled_at ? new Date(scheduled_at) : null,
+      scheduled_at: resolvedScheduledAt,
+      scheduled_timezone: effectiveTimeZone,
+      host_country: req.user?.country || null,
+      host_timezone: req.user?.timezone || effectiveTimeZone,
       duration_minutes,
       participants,
-      recording_enabled,
+      recording_enabled: policyDecision.recording_enabled,
+      regional_compliance_ack: regional_compliance_ack === true,
       country_restriction: country_restriction || null,
       location,
       join_link,
       reminders,
-      open_to_everyone,
+      open_to_everyone:
+        typeof policyDecision.open_to_everyone === "boolean"
+          ? policyDecision.open_to_everyone
+          : true,
       is_instant: req.body.is_instant || false,
     });
 
     await meeting.save();
 
     scheduleRemindersForMeeting(meeting);
-    const populated = await Meeting.findById(meeting._id)
-      .populate("host_id", "first_name last_name email")
-      .populate("participants", "first_name last_name email")
-      .lean();
+    const populated = await populateMeetingResponse(meeting._id);
     broadcastMeetingEvent("created", populated);
 
-    return res.status(201).json({ data: populated });
+    return res.status(201).json({
+      data: populated,
+      policy_warnings: policyDecision.policy_warnings,
+      policy_flags: policyDecision.policy_flags,
+    });
   } catch (error) {
     // Handle unique index error gracefully
     if (error.code === 11000 && error.keyPattern?.meeting_code) {
@@ -148,11 +192,16 @@ export const getMyMeetings = async (req, res) => {
 
     const meetings = await Meeting.find(query)
       .sort({ scheduled_at: 1 })
-      .populate("host_id", "first_name last_name email")
-      .populate("participants", "first_name last_name email")
+      .populate("host_id", "first_name last_name email country timezone user_type")
+      .populate("participants", "first_name last_name email country timezone user_type")
       .lean();
 
-    return res.json({ data: meetings });
+    return res.json({
+      data: meetings.map((meeting) => ({
+        ...meeting,
+        cross_country_context: buildMeetingCollaborationContext(meeting),
+      })),
+    });
   } catch (error) {
     console.error("[MEETING] getMyMeetings error:", error);
     return res.status(500).json({ error: "Failed to fetch meetings" });
@@ -195,17 +244,30 @@ export const getMeetingByCode = async (req, res) => {
 
     // For active/instant meetings, auto-add when open to everyone
     if (!isHost && !alreadyParticipant && meeting.status !== "ended") {
-      if (meeting.open_to_everyone !== false) {
+      const guestPolicy = applyMeetingCountryPolicies({
+        hostCountry: meeting.host_country || req.user?.country || null,
+        requestedRecordingEnabled: meeting.recording_enabled,
+        requestedOpenToEveryone: meeting.open_to_everyone,
+        complianceApproved: meeting.regional_compliance_ack === true,
+      });
+
+      if (guestPolicy.open_to_everyone !== false) {
         meeting.participants.push(userId);
         await meeting.save();
       } else if (meeting.is_instant) {
         // Instant meeting with open_to_everyone=false: return meeting data
         // without adding participant so the frontend can show the lobby
         const populated = await Meeting.findById(meeting._id)
-          .populate("host_id", "first_name last_name email")
-          .populate("participants", "first_name last_name email")
+          .populate("host_id", "first_name last_name email country timezone user_type")
+          .populate("participants", "first_name last_name email country timezone user_type")
           .lean();
-        return res.json({ data: { ...populated, _lobbyOnly: true } });
+        return res.json({
+          data: {
+            ...populated,
+            _lobbyOnly: true,
+            cross_country_context: buildMeetingCollaborationContext(populated),
+          },
+        });
       } else {
         // Scheduled meeting — block non-participants entirely
         return res.status(403).json({
@@ -214,10 +276,7 @@ export const getMeetingByCode = async (req, res) => {
       }
     }
 
-    const populated = await Meeting.findById(meeting._id)
-      .populate("host_id", "first_name last_name email")
-      .populate("participants", "first_name last_name email")
-      .lean();
+    const populated = await populateMeetingResponse(meeting._id);
 
     return res.json({ data: populated });
   } catch (error) {
@@ -231,10 +290,7 @@ export const getMeetingById = async (req, res) => {
     const { id } = req.params;
     const userId = String(req.userId);
 
-    const meeting = await Meeting.findById(id)
-      .populate("host_id", "first_name last_name email")
-      .populate("participants", "first_name last_name email")
-      .lean();
+    const meeting = await populateMeetingResponse(id);
 
     if (!meeting) {
       return res.status(404).json({ error: "Meeting not found" });
@@ -294,10 +350,10 @@ export const updateMeeting = async (req, res) => {
       "title",
       "description",
       "meeting_type",
-      "scheduled_at",
       "duration_minutes",
       "participants",
       "recording_enabled",
+      "regional_compliance_ack",
       "country_restriction",
       "location",
       "join_link",
@@ -306,15 +362,49 @@ export const updateMeeting = async (req, res) => {
       "open_to_everyone",
     ];
 
+    if (req.body.scheduled_date && req.body.scheduled_time) {
+      meeting.scheduled_at = convertScheduledLocalToUtc(
+        req.body.scheduled_date,
+        req.body.scheduled_time,
+        req.body.scheduled_timezone || meeting.scheduled_timezone || req.user?.timezone || "UTC"
+      );
+      meeting.scheduled_timezone =
+        req.body.scheduled_timezone || meeting.scheduled_timezone || req.user?.timezone || "UTC";
+    } else if (Object.prototype.hasOwnProperty.call(req.body, "scheduled_at")) {
+      meeting.scheduled_at = req.body.scheduled_at ? new Date(req.body.scheduled_at) : null;
+      if (req.body.scheduled_timezone) {
+        meeting.scheduled_timezone = req.body.scheduled_timezone;
+      }
+    }
+
     updatableFields.forEach((field) => {
       if (Object.prototype.hasOwnProperty.call(req.body, field)) {
         // eslint-disable-next-line no-param-reassign
-        meeting[field] =
-          field === "scheduled_at" && req.body[field]
-            ? new Date(req.body[field])
-            : req.body[field];
+        meeting[field] = req.body[field];
       }
     });
+
+    const hasPolicySensitiveUpdate =
+      Object.prototype.hasOwnProperty.call(req.body, "recording_enabled") ||
+      Object.prototype.hasOwnProperty.call(req.body, "open_to_everyone") ||
+      Object.prototype.hasOwnProperty.call(req.body, "regional_compliance_ack");
+
+    const policyDecision = hasPolicySensitiveUpdate
+      ? applyMeetingCountryPolicies({
+          hostCountry: meeting.host_country || req.user?.country || null,
+          requestedRecordingEnabled: meeting.recording_enabled,
+          requestedOpenToEveryone: meeting.open_to_everyone,
+          complianceApproved: meeting.regional_compliance_ack === true,
+        })
+      : { policy_warnings: [], policy_flags: null };
+
+    if (hasPolicySensitiveUpdate) {
+      meeting.recording_enabled = !!policyDecision.recording_enabled;
+      meeting.open_to_everyone =
+        typeof policyDecision.open_to_everyone === "boolean"
+          ? policyDecision.open_to_everyone
+          : !!meeting.open_to_everyone;
+    }
 
     await meeting.save();
 
@@ -323,13 +413,14 @@ export const updateMeeting = async (req, res) => {
     } else {
       clearRemindersForMeeting(meeting._id);
     }
-    const updated = await Meeting.findById(meeting._id)
-      .populate("host_id", "first_name last_name email")
-      .populate("participants", "first_name last_name email")
-      .lean();
+    const updated = await populateMeetingResponse(meeting._id);
     broadcastMeetingEvent("updated", updated);
 
-    return res.json({ data: updated });
+    return res.json({
+      data: updated,
+      policy_warnings: policyDecision.policy_warnings,
+      policy_flags: policyDecision.policy_flags,
+    });
   } catch (error) {
     console.error("[MEETING] updateMeeting error:", error);
     return res.status(500).json({ error: "Failed to update meeting" });
@@ -359,10 +450,7 @@ export const cancelMeeting = async (req, res) => {
     await meeting.save();
 
     clearRemindersForMeeting(meeting._id);
-    const cancelled = await Meeting.findById(meeting._id)
-      .populate("host_id", "first_name last_name email")
-      .populate("participants", "first_name last_name email")
-      .lean();
+    const cancelled = await populateMeetingResponse(meeting._id);
     broadcastMeetingEvent("cancelled", cancelled);
 
     return res.json({ data: cancelled });
@@ -406,17 +494,30 @@ export const joinMeetingById = async (req, res) => {
 
     // For active meetings, auto-add if open_to_everyone; otherwise block non-participants
     if (!isHost && !alreadyParticipant) {
-      if (meeting.open_to_everyone !== false) {
+      const guestPolicy = applyMeetingCountryPolicies({
+        hostCountry: meeting.host_country || req.user?.country || null,
+        requestedRecordingEnabled: meeting.recording_enabled,
+        requestedOpenToEveryone: meeting.open_to_everyone,
+        complianceApproved: meeting.regional_compliance_ack === true,
+      });
+
+      if (guestPolicy.open_to_everyone !== false) {
         meeting.participants.push(userId);
         await meeting.save();
       } else if (meeting.is_instant) {
         // Instant meeting with open_to_everyone=false: return meeting data
         // without adding participant so the frontend can show the lobby
         const populated = await Meeting.findById(meeting._id)
-          .populate("host_id", "first_name last_name email")
-          .populate("participants", "first_name last_name email")
+          .populate("host_id", "first_name last_name email country timezone user_type")
+          .populate("participants", "first_name last_name email country timezone user_type")
           .lean();
-        return res.json({ data: { ...populated, _lobbyOnly: true } });
+        return res.json({
+          data: {
+            ...populated,
+            _lobbyOnly: true,
+            cross_country_context: buildMeetingCollaborationContext(populated),
+          },
+        });
       } else {
         // Scheduled meeting — block non-participants entirely
         return res.status(403).json({
@@ -425,10 +526,7 @@ export const joinMeetingById = async (req, res) => {
       }
     }
 
-    const populated = await Meeting.findById(meeting._id)
-      .populate("host_id", "first_name last_name email")
-      .populate("participants", "first_name last_name email")
-      .lean();
+    const populated = await populateMeetingResponse(meeting._id);
     broadcastMeetingEvent("updated", populated);
 
     return res.json({ data: populated });
@@ -463,10 +561,7 @@ export const admitToMeeting = async (req, res) => {
       await meeting.save();
     }
 
-    const populated = await Meeting.findById(meeting._id)
-      .populate("host_id", "first_name last_name email")
-      .populate("participants", "first_name last_name email")
-      .lean();
+    const populated = await populateMeetingResponse(meeting._id);
     return res.json({ data: populated });
   } catch (error) {
     console.error("[MEETING] admitToMeeting error:", error);

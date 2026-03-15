@@ -100,18 +100,27 @@ export default function EmployeeTicketView() {
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const token = localStorage.getItem("token");
-  const headers = { Authorization: `Bearer ${token}` };
+  const headers = token && token !== "undefined" && token !== "null"
+    ? { Authorization: `Bearer ${token}` }
+    : {};
 
   const fetchTickets = useCallback(async () => {
+    if (!token) return; // Skip if no token
     try {
       const res = await axios.get(`${BACKEND_URL}/tickets/assigned`, { headers });
       setTickets(res.data.tickets);
     } catch (err) {
       console.error("Fetch assigned tickets error:", err);
+      if (err.response?.status === 401) {
+        // Token is invalid, clear it
+        localStorage.removeItem("token");
+        localStorage.removeItem("user");
+        localStorage.removeItem("adminData");
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [token, headers]);
 
   const fetchMessages = useCallback(async (ticketId) => {
     try {
@@ -278,11 +287,18 @@ export default function EmployeeTicketView() {
     if (!selectedTicket) return;
     setSchedulingMeeting(true);
     try {
+      const browserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
       const payload = {
         title: meetingForm.title,
         duration_minutes: Number(meetingForm.duration_minutes),
       };
-      if (meetingForm.scheduled_at) payload.scheduled_at = meetingForm.scheduled_at;
+      if (meetingForm.scheduled_at) {
+        const [scheduledDate, scheduledTime] = meetingForm.scheduled_at.split("T");
+        payload.scheduled_at = meetingForm.scheduled_at;
+        payload.scheduled_date = scheduledDate;
+        payload.scheduled_time = scheduledTime;
+        payload.scheduled_timezone = browserTimeZone;
+      }
 
       const res = await axios.post(
         `${BACKEND_URL}/tickets/${selectedTicket._id}/schedule-meeting`,

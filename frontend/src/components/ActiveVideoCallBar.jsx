@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState } from "react";
-import { PhoneOff, Mic, MicOff, Video, VideoOff, Loader2, Maximize2, Minimize2 } from "lucide-react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
+import { PhoneOff, Mic, MicOff, Video, VideoOff, Loader2, Maximize2, Minimize2, UserPlus } from "lucide-react";
+import InviteParticipantModal from "./InviteParticipantModal";
 
 const ActiveVideoCallBar = ({
   remoteUser,
@@ -12,6 +13,8 @@ const ActiveVideoCallBar = ({
   onHangUp,
   isConnecting,
   errorMessage,
+  onInviteParticipant, // New prop: callback when inviting participants
+  currentUserId, // New prop: for authorization header
 }) => {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -25,6 +28,14 @@ const ActiveVideoCallBar = ({
   const [resizeDirection, setResizeDirection] = useState(null);
   const [resizeStart, setResizeStart] = useState({ x: 0, y: 0, width: 0, height: 0, left: 0, top: 0 });
   const draggableRef = useRef(null);
+  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
+
+  // Get authorization header
+  const token = typeof localStorage !== "undefined" ? localStorage.getItem("token") : null;
+  const authHeader = useMemo(
+    () => (token ? { Authorization: `Bearer ${token}` } : {}),
+    [token]
+  );
   
   const MIN_WIDTH = 320;
   const MIN_HEIGHT = 240;
@@ -268,77 +279,75 @@ const ActiveVideoCallBar = ({
   // Full Screen Mode (Browser Fullscreen)
   if (isFullScreen) {
     return (
-      <div ref={containerRef} className="fixed inset-0 bg-black z-[100] flex flex-col">
-        {/* Remote Video - Full Screen */}
-        <div className="flex-1 relative bg-zinc-900">
-          {remoteStream ? (
+      <div ref={containerRef} className="fixed inset-0 bg-black z-[100]">
+        {/* Remote Video - fills entire screen */}
+        {remoteStream ? (
+          <video
+            ref={remoteVideoRef}
+            key="remote-fullscreen"
+            autoPlay
+            playsInline
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center bg-zinc-900">
+            {isConnecting ? (
+              <div className="text-center">
+                <Loader2 className="w-12 h-12 text-indigo-400 animate-spin mx-auto mb-4" />
+                <p className="text-zinc-400 text-sm">Connecting...</p>
+              </div>
+            ) : (
+              <div className="text-center">
+                <div className="w-24 h-24 rounded-full bg-indigo-500/20 flex items-center justify-center mx-auto mb-4">
+                  <span className="text-indigo-400 font-semibold text-3xl">
+                    {remoteUser.name?.charAt(0) || "?"}
+                  </span>
+                </div>
+                <p className="text-white text-lg font-medium">{remoteUser.name}</p>
+                <p className="text-zinc-400 text-sm mt-1">Waiting for video...</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Local Video - Picture-in-Picture (top-right, above controls) */}
+        {localStream && (
+          <div className="absolute top-4 right-4 w-64 h-48 rounded-lg overflow-hidden border-2 border-zinc-700 bg-zinc-900 shadow-xl z-20">
             <video
-              ref={remoteVideoRef}
-              key="remote-fullscreen"
+              ref={localVideoRef}
+              key="local-fullscreen"
               autoPlay
               playsInline
+              muted
               className="w-full h-full object-cover"
             />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center bg-zinc-900">
-              {isConnecting ? (
-                <div className="text-center">
-                  <Loader2 className="w-12 h-12 text-indigo-400 animate-spin mx-auto mb-4" />
-                  <p className="text-zinc-400 text-sm">Connecting...</p>
-                </div>
-              ) : (
-                <div className="text-center">
-                  <div className="w-24 h-24 rounded-full bg-indigo-500/20 flex items-center justify-center mx-auto mb-4">
-                    <span className="text-indigo-400 font-semibold text-3xl">
-                      {remoteUser.name?.charAt(0) || "?"}
-                    </span>
-                  </div>
-                  <p className="text-white text-lg font-medium">{remoteUser.name}</p>
-                  <p className="text-zinc-400 text-sm mt-1">Waiting for video...</p>
-                </div>
-              )}
-            </div>
-          )}
+            {isVideoOff && (
+              <div className="absolute inset-0 bg-zinc-900 flex items-center justify-center">
+                <VideoOff className="w-8 h-8 text-zinc-600" />
+              </div>
+            )}
+          </div>
+        )}
 
-          {/* Local Video - Picture-in-Picture */}
-          {localStream && (
-            <div className="absolute top-4 right-4 w-64 h-48 rounded-lg overflow-hidden border-2 border-zinc-700 bg-zinc-900 shadow-xl">
-              <video
-                ref={localVideoRef}
-                key="local-fullscreen"
-                autoPlay
-                playsInline
-                muted
-                className="w-full h-full object-cover"
-              />
-              {isVideoOff && (
-                <div className="absolute inset-0 bg-zinc-900 flex items-center justify-center">
-                  <VideoOff className="w-8 h-8 text-zinc-600" />
-                </div>
-              )}
-            </div>
-          )}
+        {/* Error Message */}
+        {errorMessage && (
+          <div className="absolute top-4 left-16 px-4 py-2 bg-red-500/90 text-white text-sm rounded-lg shadow-lg z-30">
+            {errorMessage}
+          </div>
+        )}
 
-          {/* Error Message */}
-          {errorMessage && (
-            <div className="absolute top-4 left-4 px-4 py-2 bg-red-500/90 text-white text-sm rounded-lg shadow-lg">
-              {errorMessage}
-            </div>
-          )}
+        {/* Exit Fullscreen Button - Top Left */}
+        <button
+          onClick={toggleFullScreen}
+          className="absolute top-4 left-4 p-2 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors backdrop-blur-sm z-30"
+          title="Exit fullscreen"
+        >
+          <Minimize2 className="w-5 h-5" />
+        </button>
 
-          {/* Mode Toggle Button */}
-          <button
-            onClick={toggleFullScreen}
-            className="absolute top-4 left-4 p-2 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors backdrop-blur-sm z-10"
-            title="Exit fullscreen"
-          >
-            <Minimize2 className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* Controls Bar - Always Visible */}
-        <div className="bg-zinc-900/98 border-t border-zinc-700/50 px-6 py-5 z-50 relative">
-          <div className="flex items-center justify-center gap-4">
+        {/* Controls Bar - overlaid at the bottom, always visible */}
+        <div className="absolute bottom-0 left-0 right-0 z-30 bg-gradient-to-t from-black/80 via-black/50 to-transparent px-6 pb-8 pt-16">
+          <div className="flex items-center justify-center gap-5">
             <button
               onClick={onToggleMute}
               className={`p-4 rounded-full transition-all shadow-lg ${
@@ -361,6 +370,14 @@ const ActiveVideoCallBar = ({
               title={isVideoOff ? "Turn on camera" : "Turn off camera"}
             >
               {isVideoOff ? <VideoOff className="w-6 h-6" /> : <Video className="w-6 h-6" />}
+            </button>
+
+            <button
+              onClick={() => setIsInviteModalOpen(true)}
+              className="p-4 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white transition-all shadow-lg"
+              title="Invite participants"
+            >
+              <UserPlus className="w-6 h-6" />
             </button>
 
             <button
@@ -538,6 +555,14 @@ const ActiveVideoCallBar = ({
           </button>
 
           <button
+            onClick={() => setIsInviteModalOpen(true)}
+            className="p-2 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 transition-colors"
+            title="Invite participants"
+          >
+            <UserPlus className="w-4 h-4" />
+          </button>
+
+          <button
             onClick={onHangUp}
             className="p-2 rounded-lg bg-red-500 hover:bg-red-600 text-white transition-colors"
             title="End call"
@@ -546,6 +571,20 @@ const ActiveVideoCallBar = ({
           </button>
         </div>
       </div>
+
+      {/* Invite Participant Modal */}
+      <InviteParticipantModal
+        isOpen={isInviteModalOpen}
+        onClose={() => setIsInviteModalOpen(false)}
+        onInvite={(userId, userName, user) => {
+          if (onInviteParticipant) {
+            onInviteParticipant(userId, userName, user);
+          }
+          setIsInviteModalOpen(false);
+        }}
+        excludeUserIds={[currentUserId, remoteUser?.id]}
+        authHeader={authHeader}
+      />
     </>
   );
 };

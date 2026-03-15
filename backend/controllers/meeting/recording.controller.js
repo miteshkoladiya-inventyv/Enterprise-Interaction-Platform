@@ -7,6 +7,7 @@ import os from "os";
 import path from "path";
 import { execFile } from "child_process";
 import { fileURLToPath } from "url";
+import { evaluateCountryFeatureAccess } from "../../utils/crossCountryCollaboration.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,6 +45,20 @@ export const uploadRecording = async (req, res) => {
     if (String(meeting.host_id) !== userId) {
       console.log(`❌ [RECORDING UPLOAD] User ${userId} is not the host of meeting ${meetingId}`);
       return res.status(403).json({ error: "Only the host can upload meeting recordings" });
+    }
+
+    const recordingPolicy = evaluateCountryFeatureAccess(
+      meeting.host_country,
+      "meeting_recording",
+      { complianceApproved: meeting.regional_compliance_ack === true }
+    );
+    const recordingAllowed = meeting.recording_enabled === true && recordingPolicy.allowed;
+    if (!recordingAllowed) {
+      return res.status(403).json({
+        error:
+          recordingPolicy.reason ||
+          "Meeting recording is disabled by policy for this host country.",
+      });
     }
 
     if (!req.file || !req.file.buffer) {

@@ -406,3 +406,75 @@ export const leaveGroupCall = async (req, res) => {
     return res.status(500).json({ error: error.message });
   }
 };
+
+/**
+ * POST /api/call/invite - Invite a user to an ongoing 1-on-1 call
+ * Converts 1-on-1 call to group call by inviting additional participants
+ */
+export const inviteToCall = async (req, res) => {
+  try {
+    const { inviteeUserId } = req.body;
+    const callerId = req.userId;
+    const caller = req.user;
+
+    if (!inviteeUserId) {
+      return res.status(400).json({ error: "inviteeUserId is required" });
+    }
+
+    const inviteeIdStr = String(inviteeUserId);
+    const callerIdStr = String(callerId);
+
+    if (inviteeIdStr === callerIdStr) {
+      return res.status(400).json({ error: "Cannot invite yourself" });
+    }
+
+    // Check if invitee exists
+    const inviteeUser = await User.findById(inviteeIdStr);
+    if (!inviteeUser) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Check if invitee is online
+    const inviteeSocketId = getReceiverSocketId(inviteeIdStr);
+    if (!inviteeSocketId) {
+      return res.status(409).json({
+        error: "User unavailable",
+        message: "The user is not online or not connected.",
+      });
+    }
+
+    // Check if invitee is already on a call
+    const inviteeCallStatus = getUserCallStatus(inviteeIdStr);
+    if (inviteeCallStatus?.inCall) {
+      return res.status(409).json({
+        error: "User is on a call",
+        message: "The user is currently on a call.",
+      });
+    }
+
+    const callerName = getCallerName(caller);
+    const inviteeName = getCallerName(inviteeUser);
+
+    // Send invitation via socket
+    io.to(inviteeSocketId).emit("video-call-invite", {
+      fromUserId: callerIdStr,
+      fromUserName: callerName,
+      inviteeUserId: inviteeIdStr,
+      inviteeName: inviteeName,
+      timestamp: new Date(),
+    });
+
+    return res.json({
+      success: true,
+      message: `Invitation sent to ${inviteeName}`,
+      invitee: {
+        id: inviteeIdStr,
+        name: inviteeName,
+        email: inviteeUser.email,
+      },
+    });
+  } catch (error) {
+    console.error("[CALL] inviteToCall error:", error);
+    return res.status(500).json({ error: error.message });
+  }
+};

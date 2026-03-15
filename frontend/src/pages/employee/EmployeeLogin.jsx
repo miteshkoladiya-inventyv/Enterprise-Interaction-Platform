@@ -32,9 +32,16 @@ export default function EmployeeLogin() {
         formData
       );
 
+      // Validate that token exists and looks like a JWT (has 3 parts separated by dots)
+      const { token } = response.data;
+      if (!token || typeof token !== "string" || token.split(".").length !== 3) {
+        setError("Invalid authentication token received from server");
+        return;
+      }
+
       // Store in localStorage
       localStorage.setItem("user", JSON.stringify(response.data.user));
-      localStorage.setItem("token", response.data.token);
+      localStorage.setItem("token", token);
 
       // Update context state to trigger socket connection
       setUser(response.data.user);

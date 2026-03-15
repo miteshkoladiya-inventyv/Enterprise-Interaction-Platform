@@ -5,6 +5,18 @@ import User from "../../models/User.js";
 import Employee from "../../models/Employee.js";
 import Meeting from "../../models/Meeting.js";
 import { broadcastMeetingEvent } from "../../socket/socketServer.js";
+import {
+  calculatePriorityScore,
+  getSLATargets,
+  findBestAvailableAgent,
+  checkSLABreach,
+  escalateTicket,
+} from "../../utils/ticketPriority.js";
+import {
+  buildMeetingCollaborationContext,
+  convertScheduledLocalToUtc,
+  evaluateCountryFeatureAccess,
+} from "../../utils/crossCountryCollaboration.js";
 
 // Generate unique ticket number
 function generateTicketNumber() {
@@ -14,10 +26,17 @@ function generateTicketNumber() {
   return `${prefix}-${timestamp}-${random}`;
 }
 
-// Create a new ticket (customer)
+// Map numeric urgency level (1-5) to string enum
+const urgencyLevelToString = (level) => {
+  const mapping = { 1: "low", 2: "medium", 3: "high", 4: "critical", 5: "critical" };
+  return mapping[level] || "medium";
+};
+
+// Create a new ticket (customer) - with auto-priority calculation and assignment
 export const createTicket = async (req, res) => {
   try {
-    const { title, description, category, country } = req.body;
+    const { title, description, category, country, urgency_level, subscription_tier } =
+      req.body;
     const userId = req.user._id;
 
     const customer = await Customer.findOne({ user_id: userId });
@@ -25,30 +44,80 @@ export const createTicket = async (req, res) => {
       return res.status(404).json({ error: "Customer profile not found" });
     }
 
-    const ticket = new SupportTicket({
+    // Convert urgency level number to string enum
+    const urgencyNum = parseInt(urgency_level) || 2;
+    const urgencyString = urgencyLevelToString(urgencyNum);
+
+    // Calculate priority based on inputs
+    const { priority, score: priorityScore } = calculatePriorityScore(
+      subscription_tier || "pro",
+      urgencyNum,
+      category
+    );
+
+    // Get SLA targets
+    const slaTargets = getSLATargets(priority);
+
+    // Auto-assign to best available agent
+    const assignedAgent = await findBestAvailableAgent(
+      null,
+      null
+    );
+
+    const ticketData = {
       ticket_number: generateTicketNumber(),
       customer_id: customer._id,
       title,
       description,
-      priority: "medium",
+      priority,
+      urgency: urgencyString,
+      subscription_tier: subscription_tier || "pro",
+      priority_score: priorityScore,
       category,
       country: country || req.user.country,
-      status: "pending",
-    });
+      status: assignedAgent ? "open" : "pending",
+      response_target_minutes: slaTargets.response_target_minutes,
+      sla_target_minutes: slaTargets.sla_target_minutes,
+    };
 
+    // If agent found, auto-assign
+    if (assignedAgent) {
+      ticketData.assigned_agent_id = assignedAgent._id;
+      ticketData.assigned_at = new Date();
+    }
+
+    const ticket = new SupportTicket(ticketData);
     await ticket.save();
 
     // Create a system message
+    let systemMessage = "Ticket created. ";
+    if (assignedAgent) {
+      const agentName = `${assignedAgent.user_id.first_name} ${assignedAgent.user_id.last_name}`;
+      systemMessage += `Auto-assigned to ${agentName} (${priority.toUpperCase()} - Priority Score: ${priorityScore.toFixed(2)}).`;
+    } else {
+      systemMessage += `Waiting for an agent to be assigned. Priority: ${priority.toUpperCase()} (Score: ${priorityScore.toFixed(2)}).`;
+    }
+
     await TicketMessage.create({
       ticket_id: ticket._id,
       sender_id: userId,
-      content: "Ticket created. Waiting for an agent to be assigned.",
+      content: systemMessage,
       message_type: "system",
     });
 
+    // Populate for response
+    const populatedTicket = await SupportTicket.findById(ticket._id)
+      .populate({
+        path: "assigned_agent_id",
+        populate: { path: "user_id", select: "first_name last_name email" },
+      });
+
     res.status(201).json({
       message: "Ticket created successfully",
-      ticket,
+      ticket: populatedTicket,
+      sla_targets: slaTargets,
+      priority_score: priorityScore,
+      auto_assigned: !!assignedAgent,
     });
   } catch (error) {
     console.error("Create ticket error:", error);
@@ -178,7 +247,7 @@ export const assignTicket = async (req, res) => {
   }
 };
 
-// Update ticket status
+// Update ticket status - with SLA tracking
 export const updateTicketStatus = async (req, res) => {
   try {
     const { ticketId } = req.params;
@@ -189,17 +258,33 @@ export const updateTicketStatus = async (req, res) => {
       return res.status(404).json({ error: "Ticket not found" });
     }
 
+    const oldStatus = ticket.status;
     ticket.status = status;
+
+    // Track SLA timestamps
+    if (status === "in_progress" && !ticket.started_at) {
+      ticket.started_at = new Date();
+    }
+
     if (status === "resolved") {
       ticket.resolved_at = new Date();
     }
+
     await ticket.save();
 
-    // System message
+    // System message with SLA info
+    let messageContent = `Ticket status changed from "${oldStatus}" to "${status}".`;
+    if (status === "in_progress") {
+      const elapsedMinutes = ticket.assigned_at
+        ? Math.round((new Date() - new Date(ticket.assigned_at)) / (1000 * 60))
+        : 0;
+      messageContent += ` (Agent started work ${elapsedMinutes} minutes after assignment)`;
+    }
+
     await TicketMessage.create({
       ticket_id: ticket._id,
       sender_id: req.user._id,
-      content: `Ticket status changed to "${status}".`,
+      content: messageContent,
       message_type: "system",
     });
 
@@ -397,7 +482,7 @@ export const getAssignedTickets = async (req, res) => {
   }
 };
 
-// Send ticket message
+// Send ticket message - with first response tracking
 export const sendTicketMessage = async (req, res) => {
   try {
     const { ticketId } = req.params;
@@ -424,9 +509,24 @@ export const sendTicketMessage = async (req, res) => {
       return res.status(403).json({ error: "Not authorized to send messages in this ticket" });
     }
 
+    // If agent responds for first time, mark first_response_at
+    if ((isAssignedAgent || isCollaborator || isAdmin) && !ticket.first_response_at) {
+      ticket.first_response_at = new Date();
+    }
+
     // Update ticket status to in_progress if it was open
     if (ticket.status === "open") {
       ticket.status = "in_progress";
+      if (!ticket.started_at) {
+        ticket.started_at = new Date();
+      }
+      await ticket.save();
+    } else if (ticket.status === "pending" && (isAssignedAgent || isCollaborator)) {
+      // If still pending and agent messages, mark as open
+      ticket.status = "open";
+      ticket.assigned_at = new Date();
+      await ticket.save();
+    } else {
       await ticket.save();
     }
 
@@ -476,6 +576,18 @@ export const uploadTicketFile = async (req, res) => {
     const ticket = await SupportTicket.findById(ticketId);
     if (!ticket) return res.status(404).json({ error: "Ticket not found" });
 
+    const exportPolicy = evaluateCountryFeatureAccess(ticket.country, "data_export", {
+      complianceApproved: req.body?.regional_compliance_ack === true,
+    });
+    if (!exportPolicy.allowed) {
+      return res.status(403).json({
+        error:
+          exportPolicy.reason ||
+          "File sharing is restricted by regional data-export policy.",
+        policy: exportPolicy,
+      });
+    }
+
     const message = await TicketMessage.create({
       ticket_id: ticketId,
       sender_id: userId,
@@ -501,7 +613,14 @@ export const uploadTicketFile = async (req, res) => {
 export const scheduleMeetingFromTicket = async (req, res) => {
   try {
     const { ticketId } = req.params;
-    const { title, scheduled_at, duration_minutes = 30 } = req.body;
+    const {
+      title,
+      scheduled_at,
+      scheduled_date,
+      scheduled_time,
+      scheduled_timezone,
+      duration_minutes = 30,
+    } = req.body;
     const userId = req.user._id;
 
     const ticket = await SupportTicket.findById(ticketId).populate({
@@ -563,7 +682,12 @@ export const scheduleMeetingFromTicket = async (req, res) => {
     }
 
     const meetingTitle = title || `Support: ${ticket.ticket_number}`;
-    const scheduledDate = scheduled_at ? new Date(scheduled_at) : new Date();
+    const effectiveTimeZone = scheduled_timezone || req.user?.timezone || "UTC";
+    const scheduledDate = scheduled_date && scheduled_time
+      ? convertScheduledLocalToUtc(scheduled_date, scheduled_time, effectiveTimeZone)
+      : scheduled_at
+        ? new Date(scheduled_at)
+        : new Date();
 
     const meeting = await Meeting.create({
       meeting_code: meetingCode,
@@ -571,6 +695,9 @@ export const scheduleMeetingFromTicket = async (req, res) => {
       host_id: userId,
       meeting_type: "support",
       scheduled_at: scheduledDate,
+      scheduled_timezone: effectiveTimeZone,
+      host_country: req.user?.country || null,
+      host_timezone: req.user?.timezone || effectiveTimeZone,
       duration_minutes,
       participants,
       recording_enabled: false,
@@ -579,16 +706,21 @@ export const scheduleMeetingFromTicket = async (req, res) => {
 
     // Populate and broadcast so every participant's MeetingModule updates in real-time
     const populatedMeeting = await Meeting.findById(meeting._id)
-      .populate("host_id", "first_name last_name email")
-      .populate("participants", "first_name last_name email")
+      .populate("host_id", "first_name last_name email country timezone user_type")
+      .populate("participants", "first_name last_name email country timezone user_type")
       .lean();
-    broadcastMeetingEvent("created", populatedMeeting);
+    const meetingWithContext = {
+      ...populatedMeeting,
+      cross_country_context: buildMeetingCollaborationContext(populatedMeeting),
+    };
+    broadcastMeetingEvent("created", meetingWithContext);
 
     // Post meeting system message in ticket chat
     const meetingMeta = JSON.stringify({
       code: meetingCode,
       title: meetingTitle,
       scheduled_at: scheduledDate.toISOString(),
+      scheduled_timezone: effectiveTimeZone,
       duration: duration_minutes,
     });
 
@@ -604,9 +736,246 @@ export const scheduleMeetingFromTicket = async (req, res) => {
       "first_name last_name user_type profile_picture"
     );
 
-    res.status(201).json({ meeting: populatedMeeting, message: populatedMsg });
+    res.status(201).json({ meeting: meetingWithContext, message: populatedMsg });
   } catch (error) {
     console.error("Schedule meeting from ticket error:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Submit customer satisfaction rating
+export const submitSatisfaction = async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+    const { rating, comment } = req.body;
+    const userId = req.user._id;
+
+    const ticket = await SupportTicket.findById(ticketId);
+    if (!ticket) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+
+    const customer = await Customer.findOne({ user_id: userId });
+    if (!customer || ticket.customer_id.toString() !== customer._id.toString()) {
+      return res.status(403).json({ error: "Only ticket creator can rate" });
+    }
+
+    if (ticket.status !== "resolved" && ticket.status !== "closed") {
+      return res.status(400).json({ 
+        error: "Can only rate resolved or closed tickets" 
+      });
+    }
+
+    ticket.satisfaction_rating = rating;
+    ticket.satisfaction_comment = comment;
+    ticket.rated_at = new Date();
+
+    await ticket.save();
+
+    // Create system message
+    await TicketMessage.create({
+      ticket_id: ticket._id,
+      sender_id: userId,
+      content: `Customer rated this ticket: ${rating}/5 stars. ${comment ? `Comment: ${comment}` : ""}`,
+      message_type: "system",
+    });
+
+    res.json({ 
+      message: "Satisfaction rating submitted",
+      ticket 
+    });
+  } catch (error) {
+    console.error("Submit satisfaction error:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Check SLA status and calculate remaining time
+export const checkSLAStatus = async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+
+    const ticket = await SupportTicket.findById(ticketId);
+    if (!ticket) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+
+    const now = new Date();
+    const response = {
+      ticket_id: ticketId,
+      ticket_number: ticket.ticket_number,
+      status: ticket.status,
+      priority: ticket.priority,
+      sla_target_minutes: ticket.sla_target_minutes,
+      response_target_minutes: ticket.response_target_minutes,
+      sla_breached: ticket.sla_breached,
+      first_response_breached: ticket.first_response_breached,
+    };
+
+    // Calculate response SLA
+    if (ticket.assigned_at) {
+      const assignedTime = new Date(ticket.assigned_at);
+      const elapsedMinutes = Math.round((now - assignedTime) / (1000 * 60));
+      const remainingMinutes = ticket.response_target_minutes - elapsedMinutes;
+
+      response.response_sla = {
+        elapsed_minutes: elapsedMinutes,
+        target_minutes: ticket.response_target_minutes,
+        remaining_minutes: Math.max(0, remainingMinutes),
+        breached: remainingMinutes < 0,
+        breach_percentage: (elapsedMinutes / ticket.response_target_minutes) * 100,
+      };
+    }
+
+    // Calculate overall SLA
+    if (ticket.assigned_at && ticket.status !== "resolved" && ticket.status !== "closed") {
+      const assignedTime = new Date(ticket.assigned_at);
+      const elapsedMinutes = Math.round((now - assignedTime) / (1000 * 60));
+      const remainingMinutes = ticket.sla_target_minutes - elapsedMinutes;
+
+      response.overall_sla = {
+        elapsed_minutes: elapsedMinutes,
+        target_minutes: ticket.sla_target_minutes,
+        remaining_minutes: Math.max(0, remainingMinutes),
+        breached: remainingMinutes < 0,
+        breach_percentage: (elapsedMinutes / ticket.sla_target_minutes) * 100,
+      };
+    }
+
+    // Show resolution time if resolved
+    if (ticket.resolved_at && ticket.assigned_at) {
+      const resolvedTime = new Date(ticket.resolved_at);
+      const assignedTime = new Date(ticket.assigned_at);
+      const resolutionMinutes = Math.round((resolvedTime - assignedTime) / (1000 * 60));
+
+      response.resolution_time = {
+        minutes: resolutionMinutes,
+        target_minutes: ticket.sla_target_minutes,
+        met_sla: resolutionMinutes <= ticket.sla_target_minutes,
+      };
+    }
+
+    res.json(response);
+  } catch (error) {
+    console.error("Check SLA status error:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Manual ticket escalation (admin/manager)
+export const escalateTicketManual = async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+    const { reason } = req.body;
+
+    const ticket = await SupportTicket.findById(ticketId);
+    if (!ticket) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+
+    const escalatedTicket = await escalateTicket(ticket, reason || "Manual escalation by admin");
+    await escalatedTicket.save();
+
+    // Create system message
+    const levelNames = {
+      1: "Team Lead",
+      2: "Manager",
+      3: "Director"
+    };
+
+    await TicketMessage.create({
+      ticket_id: ticket._id,
+      sender_id: req.user._id,
+      content: `Ticket escalated to ${levelNames[escalatedTicket.escalation_level]} level. Reason: ${reason || "Manual escalation"}`,
+      message_type: "system",
+    });
+
+    res.json({ 
+      message: "Ticket escalated successfully",
+      ticket: escalatedTicket 
+    });
+  } catch (error) {
+    console.error("Escalate ticket error:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Get SLA statistics for admin dashboard
+export const getSLAStats = async (req, res) => {
+  try {
+    const allTickets = await SupportTicket.find();
+
+    const stats = {
+      total_tickets: allTickets.length,
+      by_status: {},
+      by_priority: {},
+      sla_breaches: 0,
+      avg_resolution_time_minutes: 0,
+      avg_satisfaction_rating: 0,
+    };
+
+    // Count by status and priority
+    allTickets.forEach((ticket) => {
+      stats.by_status[ticket.status] = (stats.by_status[ticket.status] || 0) + 1;
+      stats.by_priority[ticket.priority] = (stats.by_priority[ticket.priority] || 0) + 1;
+
+      if (ticket.sla_breached) stats.sla_breaches += 1;
+    });
+
+    // Calculate average resolution time
+    const resolvedTickets = allTickets.filter(
+      (t) => t.assigned_at && t.resolved_at
+    );
+    if (resolvedTickets.length > 0) {
+      const totalTime = resolvedTickets.reduce((sum, t) => {
+        const time = new Date(t.resolved_at) - new Date(t.assigned_at);
+        return sum + time;
+      }, 0);
+      stats.avg_resolution_time_minutes = Math.round(
+        totalTime / resolvedTickets.length / (1000 * 60)
+      );
+    }
+
+    // Calculate average satisfaction rating
+    const ratedTickets = allTickets.filter((t) => t.satisfaction_rating);
+    if (ratedTickets.length > 0) {
+      const totalRating = ratedTickets.reduce((sum, t) => sum + t.satisfaction_rating, 0);
+      stats.avg_satisfaction_rating = parseFloat(
+        (totalRating / ratedTickets.length).toFixed(2)
+      );
+    }
+
+    // Top agents by workload and satisfaction
+    const agents = await Employee.find({ employee_type: "customer_support" }).lean();
+    const agentStats = await Promise.all(
+      agents.map(async (agent) => {
+        const agentTickets = allTickets.filter(
+          (t) => t.assigned_agent_id?.toString() === agent._id.toString()
+        );
+        const ratedAgentTickets = agentTickets.filter((t) => t.satisfaction_rating);
+        const avgRating =
+          ratedAgentTickets.length > 0
+            ? ratedAgentTickets.reduce((sum, t) => sum + t.satisfaction_rating, 0) /
+              ratedAgentTickets.length
+            : 0;
+
+        const agentUser = await User.findById(agent.user_id).lean();
+
+        return {
+          agent_id: agent._id,
+          agent_name: `${agentUser?.first_name || ""} ${agentUser?.last_name || ""}`.trim(),
+          assigned_tickets: agentTickets.length,
+          resolved_tickets: agentTickets.filter((t) => t.status === "resolved").length,
+          avg_satisfaction: parseFloat(avgRating.toFixed(2)),
+        };
+      })
+    );
+
+    stats.agent_stats = agentStats.sort((a, b) => b.resolved_tickets - a.resolved_tickets);
+
+    res.json(stats);
+  } catch (error) {
+    console.error("Get SLA stats error:", error);
     res.status(500).json({ error: error.message });
   }
 };

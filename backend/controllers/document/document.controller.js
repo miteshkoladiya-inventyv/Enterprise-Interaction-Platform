@@ -1,5 +1,6 @@
 import Document from "../../models/Document.js";
 import User from "../../models/User.js";
+import { evaluateCountryFeatureAccess } from "../../utils/crossCountryCollaboration.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -26,6 +27,24 @@ function canWrite(doc, userId) {
 
 function isOwnerOrAdmin(doc, userId, req) {
   return idStr(doc.owner) === String(userId) || req.user?.user_type === "admin";
+}
+
+async function enforceDocumentDataExportPolicy({ country, complianceApproved, res }) {
+  const exportPolicy = evaluateCountryFeatureAccess(country, "data_export", {
+    complianceApproved,
+  });
+
+  if (!exportPolicy.allowed) {
+    res.status(403).json({
+      error:
+        exportPolicy.reason ||
+        "Document sharing/export is restricted by regional policy.",
+      policy: exportPolicy,
+    });
+    return false;
+  }
+
+  return true;
 }
 
 // ─── CRUD ─────────────────────────────────────────────────────────────────────
@@ -139,6 +158,15 @@ export const updateDocument = async (req, res) => {
 
     // Only owner/admin can toggle public visibility
     if (is_public !== undefined && isOwnerOrAdmin(doc, userId, req)) {
+      if (is_public === true || is_public === "true") {
+        const ownerUser = await User.findById(doc.owner).select("country").lean();
+        const allowed = await enforceDocumentDataExportPolicy({
+          country: ownerUser?.country,
+          complianceApproved: req.body?.regional_compliance_ack === true,
+          res,
+        });
+        if (!allowed) return;
+      }
       doc.is_public = !!is_public;
     }
 
@@ -222,6 +250,15 @@ export const addCollaborator = async (req, res) => {
     if (!isOwnerOrAdmin(doc, requesterId, req)) {
       return res.status(403).json({ error: "Only the owner can add collaborators" });
     }
+
+    const ownerUser = await User.findById(doc.owner).select("country").lean();
+    const allowed = await enforceDocumentDataExportPolicy({
+      country: ownerUser?.country,
+      complianceApproved: req.body?.regional_compliance_ack === true,
+      res,
+    });
+    if (!allowed) return;
+
     if (String(doc.owner) === String(targetId)) {
       return res.status(400).json({ error: "Cannot add the owner as a collaborator" });
     }
@@ -384,13 +421,22 @@ export const getDocumentByShareToken = async (req, res) => {
     const { token } = req.params;
 
     const doc = await Document.findOne({ share_token: token })
-      .populate("owner", "first_name last_name email profile_picture")
+      .populate("owner", "first_name last_name email profile_picture country")
       .populate("collaborators.user", "first_name last_name email profile_picture")
       .populate("last_edited_by", "first_name last_name email profile_picture")
       .lean();
 
     if (!doc) return res.status(404).json({ error: "Document not found" });
     if (!doc.is_public) return res.status(403).json({ error: "This document is not publicly shared" });
+
+    const allowed = await enforceDocumentDataExportPolicy({
+      country: doc.owner?.country,
+      complianceApproved:
+        req.query?.regional_compliance_ack === "true" ||
+        req.query?.regional_compliance_ack === true,
+      res,
+    });
+    if (!allowed) return;
 
     res.json({ ...doc, my_access: "read" });
   } catch (err) {

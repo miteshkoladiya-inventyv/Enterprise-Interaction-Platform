@@ -9,31 +9,28 @@ import {
   Menu,
   X,
   User,
-  BarChart3,
   ChevronLeft,
   ChevronRight,
   Hexagon,
   Building2,
   Ticket,
   ShieldCheck,
-  PenLine,
   FileText,
+  Globe2,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import EmployeeManagement from "./EmployeeManagement";
 import Dashboard from "./Dashboard";
 import AdminProfilePage from "./AdminProfilePage";
-import AnalyticsDashboard from "./AnalyticsDashboard";
-
 import DepartmentManagement from "./DepartmentManagement";
 import AdminChangePasswordPage from "./AdminChangePasswordPage";
 import TicketManagement from "./TicketManagement";
 import RoleManagement from "./RoleManagement";
 import ChatInterface from "@/components/ChatInterface";
 import MeetingModule from "@/components/MeetingModule";
-import WhiteboardModule from "@/components/WhiteboardModule";
 import FileManager from "@/components/FileManager";
 import FloatingMeetingBar from "@/components/FloatingMeetingBar";
+import CrossCountryCollaborationPanel from "@/components/CrossCountryCollaborationPanel";
 import { GlobalCallProvider } from "@/context/CallContextProvider";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -94,9 +91,8 @@ export default function AdminDashboard() {
     { id: "meetings", icon: Video, label: "Meetings" },
     { id: "tickets", icon: Ticket, label: "Tickets" },
     { id: "files", icon: FileText, label: "Files" },
+    { id: "global-collab", icon: Globe2, label: "Global Work" },
     { id: "roles", icon: ShieldCheck, label: "Roles & Access" },
-    // { id: "analytics", icon: BarChart3, label: "Analytics" },
-    // { id: "whiteboard", icon: PenLine, label: "Whiteboard" },
     { id: "profile", icon: User, label: "Profile" },
   ];
 
@@ -114,10 +110,10 @@ export default function AdminDashboard() {
         return <TicketManagement />;
       case "files":
         return <FileManager />;
+      case "global-collab":
+        return <CrossCountryCollaborationPanel />;
       case "roles":
         return <RoleManagement />;
-      case "analytics":
-        return <AnalyticsDashboard />;
       case "profile":
         return <AdminProfilePage onNavigate={handleNavigation} />;
       case "change-password":
@@ -327,7 +323,7 @@ export default function AdminDashboard() {
               />
             )}
 
-            {currentPage !== "meetings" && currentPage !== "whiteboard" && renderPageContent()}
+            {currentPage !== "meetings" && renderPageContent()}
 
             {/* MeetingModule is ALWAYS mounted — hidden via CSS when not on the meetings tab */}
             <MeetingModule
@@ -335,8 +331,7 @@ export default function AdminDashboard() {
               onMeetingStateChange={handleMeetingStateChange}
             />
 
-            {/* WhiteboardModule is ALWAYS mounted — hidden via CSS when not on the whiteboard tab */}
-            <WhiteboardModule isVisible={currentPage === "whiteboard"} />
+
           </main>
         </div>
       </div>

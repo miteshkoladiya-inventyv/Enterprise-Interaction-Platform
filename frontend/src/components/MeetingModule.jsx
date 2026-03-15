@@ -44,6 +44,7 @@ import {
   ScrollText,
   Sparkles,
   AlertCircle,
+  Globe2,
   ChevronDown,
   ChevronUp,
   Cpu,
@@ -87,6 +88,12 @@ const MEETING_TYPES = [
 ];
 
 const DEFAULT_REMINDERS = [5, 15, 30];
+
+const SCHEDULING_TIMEZONES = [
+  { value: "Asia/Kolkata", label: "India (Asia/Kolkata)" },
+  { value: "America/New_York", label: "USA (America/New_York)" },
+  { value: "Europe/Berlin", label: "Germany (Europe/Berlin)" },
+];
 
 function startOfDay(date) {
   const d = new Date(date);
@@ -162,6 +169,43 @@ function getRelativeTime(dateStr) {
   }
 }
 
+function formatInTimeZone(date, timeZone, options = {}) {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    ...options,
+  }).format(new Date(date));
+}
+
+function getDateInputValueInTimeZone(date, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(date));
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  return `${year}-${month}-${day}`;
+}
+
+function getTimeInputValueInTimeZone(date, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(date));
+  const hour = parts.find((part) => part.type === "hour")?.value;
+  const minute = parts.find((part) => part.type === "minute")?.value;
+  return `${hour}:${minute}`;
+}
+
 const STATUS_FILTERS = [
   { value: "all", label: "All" },
   { value: "scheduled", label: "Upcoming" },
@@ -200,6 +244,11 @@ const MeetingRoom = ({
   const containerRef = useRef(null);
 
   const handleRecordingToggle = async () => {
+    if (!activeMeeting?.recording_enabled) {
+      toast.error("Recording is disabled for this meeting by regional policy.");
+      return;
+    }
+
     if (meetingCall.isRecording) {
       const segments = await meetingCall.stopRecording();
       if (segments.length > 0 && onUploadRecordings) {
@@ -714,14 +763,18 @@ const MeetingRoom = ({
                 <button
                   type="button"
                   onClick={handleRecordingToggle}
-                  disabled={uploadingRecordings}
+                  disabled={uploadingRecordings || !activeMeeting.recording_enabled}
                   title={
-                    meetingCall.isRecording
+                    !activeMeeting.recording_enabled
+                      ? "Recording disabled by regional policy"
+                      : meetingCall.isRecording
                       ? "Stop recording"
                       : "Start recording (saves to cloud)"
                   }
                   className={`p-3 rounded-full transition-colors ${
-                    meetingCall.isRecording
+                    !activeMeeting.recording_enabled
+                      ? "bg-zinc-800/60 text-zinc-500"
+                      : meetingCall.isRecording
                       ? "bg-red-500/30 text-red-400 hover:bg-red-500/40"
                       : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
                   } ${uploadingRecordings ? "opacity-50 pointer-events-none" : ""}`}
@@ -1724,6 +1777,10 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
   const participantSearchTimeoutRef = useRef(null);
 
   const token = localStorage.getItem("token");
+  const browserTimeZone = useMemo(
+    () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+    []
+  );
   const axiosConfig = useMemo(
     () => ({
       headers: {
@@ -1755,11 +1812,14 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
     meeting_type: "internal",
     date: "",
     time: "",
+    scheduled_timezone: browserTimeZone,
+    regional_compliance_ack: false,
     duration_minutes: 30,
     location: "",
     participants: [],
     reminders: [...DEFAULT_REMINDERS],
   });
+  const [instantComplianceAck, setInstantComplianceAck] = useState(false);
 
   // ---- Computed values ----
   const monthLabel = useMemo(
@@ -2117,6 +2177,8 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
       meeting_type: "internal",
       date: dateStr,
       time: timeStr,
+      scheduled_timezone: browserTimeZone,
+      regional_compliance_ack: false,
       duration_minutes: 30,
       location: "",
       participants: [],
@@ -2127,17 +2189,16 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
 
   const openEditForm = (meeting) => {
     const d = meeting.scheduled_at ? new Date(meeting.scheduled_at) : null;
+    const scheduleTimeZone = meeting.scheduled_timezone || browserTimeZone;
     setEditingMeeting(meeting);
     setForm({
       title: meeting.title || "",
       description: meeting.description || "",
       meeting_type: meeting.meeting_type || "internal",
-      date: d ? toLocalDateString(d) : "",
-      time: d
-        ? `${String(d.getHours()).padStart(2, "0")}:${String(
-            d.getMinutes()
-          ).padStart(2, "0")}`
-        : "",
+      date: d ? getDateInputValueInTimeZone(d, scheduleTimeZone) : "",
+      time: d ? getTimeInputValueInTimeZone(d, scheduleTimeZone) : "",
+      scheduled_timezone: scheduleTimeZone,
+      regional_compliance_ack: meeting.regional_compliance_ack === true,
       duration_minutes: meeting.duration_minutes || 30,
       location: meeting.location || "",
       participants: (meeting.participants || []).map((p) => ({
@@ -2245,6 +2306,13 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
     });
   };
 
+  const notifyPolicyWarnings = (warnings) => {
+    if (!Array.isArray(warnings) || warnings.length === 0) return;
+    warnings.forEach((warning) => {
+      if (warning) toast.warning(warning);
+    });
+  };
+
   // ---- Create / Edit meeting ----
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -2269,6 +2337,11 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
         description: form.description.trim() || undefined,
         meeting_type: form.meeting_type,
         scheduled_at: scheduledAt.toISOString(),
+        scheduled_date: form.date,
+        scheduled_time: form.time,
+        scheduled_timezone: form.scheduled_timezone || browserTimeZone,
+        recording_enabled: true,
+        regional_compliance_ack: form.regional_compliance_ack === true,
         duration_minutes: Number(form.duration_minutes) || 30,
         location: form.location.trim() || undefined,
         participants: form.participants.map((p) => p._id),
@@ -2288,6 +2361,7 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
         setMeetings((prev) =>
           prev.map((m) => (m._id === updated._id ? updated : m))
         );
+        notifyPolicyWarnings(data.policy_warnings);
         toast.success("Meeting updated");
       } else {
         const { data } = await axios.post(
@@ -2300,6 +2374,7 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
           if (prev.some((m) => m._id === created._id)) return prev;
           return [...prev, created];
         });
+        notifyPolicyWarnings(data.policy_warnings);
         toast.success("Meeting created");
       }
 
@@ -2322,8 +2397,12 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
     setShowInstantMeetingDialog(true);
   };
 
-  const handleInstantMeeting = async (openToEveryone = true) => {
+  const handleInstantMeeting = async (
+    openToEveryone = true,
+    regionalComplianceAck = false
+  ) => {
     setShowInstantMeetingDialog(false);
+    setInstantComplianceAck(false);
     if (!socket) {
       toast.error("Connecting... Please wait");
       return;
@@ -2351,12 +2430,15 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
           scheduled_at: now.toISOString(),
           duration_minutes: 30,
           participants: [],
+          recording_enabled: true,
+          regional_compliance_ack: regionalComplianceAck === true,
           open_to_everyone: openToEveryone,
           is_instant: true,
         },
         axiosConfig
       );
       const meeting = data.data;
+      notifyPolicyWarnings(data.policy_warnings);
       setMeetings((prev) => {
         if (prev.some((m) => m._id === meeting._id)) return prev;
         return [...prev, meeting];
@@ -2932,18 +3014,29 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" role="dialog" aria-modal="true">
           <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 shadow-xl max-w-sm w-full mx-4">
             <h3 className="text-lg font-semibold text-white mb-2">Start instant meeting</h3>
-            <p className="text-sm text-zinc-400 mb-6">Is it open for everyone with the link?</p>
+            <p className="text-sm text-zinc-400 mb-4">Is it open for everyone with the link?</p>
+            <label className="mb-5 flex items-start gap-2 text-xs text-zinc-300">
+              <input
+                type="checkbox"
+                checked={instantComplianceAck}
+                onChange={(e) => setInstantComplianceAck(e.target.checked)}
+                className="mt-0.5 h-3.5 w-3.5 rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
+              />
+              <span>
+                I acknowledge regional compliance requirements (needed in policy-restricted regions).
+              </span>
+            </label>
             <div className="flex flex-col sm:flex-row gap-3">
               <button
                 type="button"
-                onClick={() => handleInstantMeeting(true)}
+                onClick={() => handleInstantMeeting(true, instantComplianceAck)}
                 className="flex-1 px-4 py-3 rounded-lg bg-emerald-600 text-white font-medium hover:bg-emerald-500"
               >
                 Yes
               </button>
               <button
                 type="button"
-                onClick={() => handleInstantMeeting(false)}
+                onClick={() => handleInstantMeeting(false, instantComplianceAck)}
                 className="flex-1 px-4 py-3 rounded-lg bg-zinc-700 text-white font-medium hover:bg-zinc-600"
               >
                 No
@@ -3179,8 +3272,15 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
             <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1">
               {selectedDateMeetings.map((m) => {
                 const d = m.scheduled_at ? new Date(m.scheduled_at) : null;
-                const timeLabel = d
-                  ? d.toLocaleTimeString("en-US", {
+                const scheduleTimeZone = m.scheduled_timezone || browserTimeZone;
+                const localTimeLabel = d
+                  ? formatInTimeZone(d, browserTimeZone, {
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })
+                  : "--";
+                const originTimeLabel = d
+                  ? formatInTimeZone(d, scheduleTimeZone, {
                       hour: "numeric",
                       minute: "2-digit",
                     })
@@ -3216,11 +3316,17 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
                         <div className="flex items-center gap-2 text-xs text-zinc-400 mt-1">
                           <span className="inline-flex items-center gap-1">
                             <Clock className="w-3 h-3" />
-                            {timeLabel}
+                            {localTimeLabel}
                             {m.duration_minutes
                               ? ` • ${m.duration_minutes} min`
                               : ""}
                           </span>
+                          {scheduleTimeZone !== browserTimeZone && (
+                            <span className="inline-flex items-center gap-1 text-zinc-500">
+                              <Globe2 className="w-3 h-3" />
+                              {originTimeLabel} {scheduleTimeZone}
+                            </span>
+                          )}
                           {m.meeting_type && (
                             <span className="px-2 py-0.5 rounded-full bg-zinc-900 text-[11px] uppercase tracking-wide">
                               {MEETING_TYPES.find(
@@ -3363,6 +3469,22 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
                     )}
 
                     <div className="mt-2 space-y-1.5">
+                      {m.cross_country_context?.is_cross_country && (
+                        <div className="flex flex-wrap gap-1.5 text-[11px] text-zinc-400">
+                          <span className="inline-flex items-center gap-1 rounded-full border border-indigo-500/20 bg-indigo-500/10 px-2 py-0.5 text-indigo-300">
+                            <Globe2 className="w-3 h-3" />
+                            Cross-country
+                          </span>
+                          {m.cross_country_context.participant_countries.map((country) => (
+                            <span
+                              key={`${m._id}-${country.country}`}
+                              className="rounded-full border border-zinc-700/60 bg-zinc-900 px-2 py-0.5"
+                            >
+                              {country.country_label}: {country.scheduled_label_local}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       {participants.length > 0 && (
                         <div className="flex items-center gap-1.5 text-xs text-zinc-400">
                           <Users className="w-3.5 h-3.5" />
@@ -3466,6 +3588,38 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
                   />
                 </div>
               </div>
+
+              <div>
+                <label className="block text-[11px] text-zinc-400 mb-1">
+                  Scheduling timezone
+                </label>
+                <select
+                  value={form.scheduled_timezone}
+                  onChange={(e) => handleFormChange("scheduled_timezone", e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-800 border border-zinc-700/60 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                >
+                  {SCHEDULING_TIMEZONES.map((timezoneOption) => (
+                    <option key={timezoneOption.value} value={timezoneOption.value}>
+                      {timezoneOption.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-zinc-500">
+                  The saved meeting time is converted from this timezone and shown locally to each participant.
+                </p>
+              </div>
+
+              <label className="flex items-start gap-2 rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-3 py-2 text-[11px] text-zinc-300">
+                <input
+                  type="checkbox"
+                  checked={form.regional_compliance_ack}
+                  onChange={(e) => handleFormChange("regional_compliance_ack", e.target.checked)}
+                  className="mt-0.5 h-3.5 w-3.5 rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
+                />
+                <span>
+                  Confirm regional compliance for policy-restricted features (recording, AI, exports).
+                </span>
+              </label>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>

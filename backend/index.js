@@ -14,12 +14,9 @@ import fileRoutes from "./routes/file.routes.js";
 import directChatRouter from "./routes/directChat.routes.js";
 import callRoutes from "./routes/call.routes.js";
 import meetingRoutes from "./routes/meeting.routes.js";
-import analyticsRoutes from "./routes/analytics.routes.js";
-import leaveRoutes from "./routes/leave.routes.js";
 import departmentRoutes from "./routes/department.routes.js";
 import ticketRoutes from "./routes/ticket.routes.js";
 import roleRoutes from "./routes/role.routes.js";
-import whiteboardRoutes from "./routes/whiteboard.routes.js";
 import documentRoutes from "./routes/document.routes.js";
 import { verifyEmailConfig } from "./utils/emailService.js";
 import { server, app } from "./socket/socketServer.js";
@@ -97,12 +94,9 @@ app.use("/api/direct_chat", directChatRouter);
 app.use("/api/call", callRoutes);
 app.use("/api/meetings", meetingRoutes);
 app.use("/api/ai", aiRoutes);
-app.use("/api/analytics", analyticsRoutes);
-app.use("/api/leave", leaveRoutes);
 app.use("/api/departments", departmentRoutes);
 app.use("/api/tickets", ticketRoutes);
 app.use("/api/roles", roleRoutes);
-app.use("/api/whiteboards", whiteboardRoutes);
 app.use("/api/documents", documentRoutes);
 // Admin dashboard stats
 app.get("/api/admin/stats", verifyToken, async (req, res) => {

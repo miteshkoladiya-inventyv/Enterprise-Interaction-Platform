@@ -30,8 +30,16 @@ export default function CustomerLogin() {
         `${BACKEND_URL}/auth/customer/login`,
         formData
       );
+
+      // Validate that token exists and looks like a JWT (has 3 parts separated by dots)
+      const { token } = response.data;
+      if (!token || typeof token !== "string" || token.split(".").length !== 3) {
+        setError("Invalid authentication token received from server");
+        return;
+      }
+
       localStorage.setItem("customerData", JSON.stringify(response.data.user));
-      localStorage.setItem("token", response.data.token);
+      localStorage.setItem("token", token);
       setUser(response.data.user);
       setTimeout(() => {
         navigate("/customer/dashboard");

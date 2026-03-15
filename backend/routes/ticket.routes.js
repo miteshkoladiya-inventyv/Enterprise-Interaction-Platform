@@ -16,6 +16,10 @@ import {
   getTicketMessages,
   uploadTicketFile,
   scheduleMeetingFromTicket,
+  submitSatisfaction,
+  checkSLAStatus,
+  escalateTicketManual,
+  getSLAStats,
 } from "../controllers/ticket/ticket.controller.js";
 import { verifyToken, requirePermission } from "../middlewares/auth.middleware.js";
 import { upload } from "../config/cloudinary.js";
@@ -25,6 +29,7 @@ const router = express.Router();
 // Customer routes
 router.post("/", verifyToken, createTicket);
 router.get("/my-tickets", verifyToken, getMyTickets);
+router.post("/:ticketId/satisfaction", verifyToken, submitSatisfaction);
 
 // Employee routes (assigned tickets + collaborator actions)
 router.get("/assigned", verifyToken, getAssignedTickets);
@@ -34,12 +39,15 @@ router.delete("/:ticketId/collaborators/:employeeId", verifyToken, removeCollabo
 
 // Admin/permission-based routes
 router.get("/all", verifyToken, requirePermission("tickets:manage"), getAllTickets);
+router.get("/stats/sla", verifyToken, requirePermission("tickets:manage"), getSLAStats);
 router.put("/:ticketId/assign", verifyToken, requirePermission("tickets:assign"), assignTicket);
 router.put("/:ticketId/priority", verifyToken, requirePermission("tickets:manage"), updateTicketPriority);
+router.put("/:ticketId/escalate", verifyToken, requirePermission("tickets:manage"), escalateTicketManual);
 router.get("/internal-employees", verifyToken, requirePermission("tickets:assign"), getInternalEmployees);
 
 // Shared routes
 router.get("/:ticketId", verifyToken, getTicket);
+router.get("/:ticketId/sla", verifyToken, checkSLAStatus);
 router.put("/:ticketId/status", verifyToken, updateTicketStatus);
 
 // Ticket chat

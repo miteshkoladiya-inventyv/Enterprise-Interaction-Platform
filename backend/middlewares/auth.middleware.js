@@ -9,9 +9,26 @@ import Role from "../models/Role.js";
 export const verifyToken = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
-    const token = authHeader?.replace("Bearer ", "");
-    if (!token) {
-      return res.status(401).json({ error: "No token, authorization denied" });
+    
+    // Check if Authorization header exists
+    if (!authHeader) {
+      return res.status(401).json({ error: "No authorization header, authorization denied" });
+    }
+
+    // Extract token, handling various formats
+    const token = authHeader.startsWith("Bearer ") 
+      ? authHeader.slice(7)
+      : authHeader;
+
+    // Validate token is not empty or just whitespace
+    if (!token || token.trim() === "") {
+      return res.status(401).json({ error: "Empty token, authorization denied" });
+    }
+
+    // Check if JWT_SECRET is configured
+    if (!process.env.JWT_SECRET) {
+      console.error("CRITICAL: JWT_SECRET is not configured in environment variables");
+      return res.status(500).json({ error: "Server configuration error" });
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -29,7 +46,17 @@ export const verifyToken = async (req, res, next) => {
 
     next();
   } catch (error) {
-    console.error("Token verification error:", error);
+    if (error.name === "JsonWebTokenError") {
+      console.error("JWT parsing error:", error.message);
+      return res.status(401).json({ 
+        error: "Invalid token format",
+        details: process.env.NODE_ENV === "development" ? error.message : undefined
+      });
+    }
+    if (error.name === "TokenExpiredError") {
+      return res.status(401).json({ error: "Token has expired" });
+    }
+    console.error("Token verification error:", error.message);
     res.status(401).json({ error: "Token is not valid" });
   }
 };

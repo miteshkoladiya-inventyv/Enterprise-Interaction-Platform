@@ -44,7 +44,9 @@ export default function TicketManagement() {
   const [detailTicket, setDetailTicket] = useState(null);
 
   const token = localStorage.getItem("token");
-  const headers = { Authorization: `Bearer ${token}` };
+  const headers = token && token !== "undefined" && token !== "null"
+    ? { Authorization: `Bearer ${token}` }
+    : {};
 
   const fetchTickets = useCallback(async () => {
     try {

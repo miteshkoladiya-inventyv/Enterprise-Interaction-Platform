@@ -62,6 +62,18 @@ export function GlobalCallProvider({ children }) {
     [axiosConfig]
   );
 
+  const inviteToCallApi = useCallback(
+    async (inviteeUserId) => {
+      const { data } = await axios.post(
+        `${BACKEND_URL}/call/invite`,
+        { inviteeUserId: String(inviteeUserId) },
+        axiosConfig
+      );
+      return data;
+    },
+    [axiosConfig]
+  );
+
   const audioCall = useAudioCall(
     socket,
     user?.id ?? user?._id,
@@ -146,6 +158,16 @@ export function GlobalCallProvider({ children }) {
           onHangUp={videoCall.endCall}
           isConnecting={videoCall.callState === "connecting"}
           errorMessage={videoCall.errorMessage}
+          currentUserId={user?.id || user?._id}
+          onInviteParticipant={async (userId, userName) => {
+            try {
+              await inviteToCallApi(userId);
+              console.log("[CALL] Invited", userName, "to call");
+            } catch (error) {
+              console.error("[CALL] Failed to invite:", error);
+              toast.error(`Failed to invite ${userName}`);
+            }
+          }}
         />
       )}
     </CallContext.Provider>

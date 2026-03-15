@@ -14,6 +14,7 @@ import CustomerRegister from "./pages/customer/CustomerRegister";
 import CustomerDashboard from "./pages/customer/CustomerDashboard";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
+import SharedFilePage from "./pages/SharedFilePage";
 
 import AuthContextProvider from "./context/AuthContextProvider";
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -67,6 +68,7 @@ function App() {
         <Route path="/join/:code" element={<JoinMeetingPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
+        <Route path="/shared/:token" element={<SharedFilePage />} />
 
         {/* EMPLOYEE PROTECTED */}
         <Route

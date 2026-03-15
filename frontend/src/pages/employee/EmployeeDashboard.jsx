@@ -1,9 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
-  Home,
   MessageSquare,
-  Users,
   FileText,
   Video,
   User,
@@ -13,16 +11,14 @@ import {
   ChevronDown,
   Hexagon,
   Ticket,
-  PenLine,
+  Globe2,
 } from "lucide-react";
-import EmployeeHome from "@/components/EmployeeHome";
 import ChatInterface from "@/components/ChatInterface";
 import MeetingModule from "@/components/MeetingModule";
-import WhiteboardModule from "@/components/WhiteboardModule";
 import FloatingMeetingBar from "@/components/FloatingMeetingBar";
+import CrossCountryCollaborationPanel from "@/components/CrossCountryCollaborationPanel";
 
 import EmployeeTicketView from "@/components/EmployeeTicketView";
-import DocumentsPage from "@/pages/documents/DocumentsPage";
 import FileManager from "@/components/FileManager";
 import { GlobalCallProvider } from "@/context/CallContextProvider";
 import { Button } from "@/components/ui/button";
@@ -61,13 +57,11 @@ export default function EmployeeDashboard() {
   };
 
   const navItems = [
-    // { id: "home", icon: Home, label: "Home" },
     { id: "messages", icon: MessageSquare, label: "Messages" },
     { id: "meetings", icon: Video, label: "Meetings" },
     { id: "files", icon: FileText, label: "Files" },
-    // { id: "team", icon: Users, label: "Team" },
-    // { id: "whiteboard", icon: PenLine, label: "Whiteboard" },
     { id: "tickets", icon: Ticket, label: "Tickets" },
+    { id: "global-work", icon: Globe2, label: "Global Work" },
   ];
 
   return (
@@ -199,23 +193,7 @@ export default function EmployeeDashboard() {
           />
         )}
 
-        {/* {activeTab === "home" && <EmployeeHome onNavigate={setActiveTab} />} */}
-        
-        {activeTab === "messages" && <ChatInterface onNavigate={setActiveTab}  />}
-
-        {/* {activeTab === "team" && (
-          <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <h1 className="text-xl font-semibold text-zinc-100 mb-1">Team</h1>
-            <p className="text-sm text-zinc-500 mb-6">Manage your team members</p>
-            <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-12 text-center">
-              <div className="size-14 rounded-full bg-zinc-800/80 flex items-center justify-center mx-auto mb-3">
-                <Users className="size-6 text-zinc-500" />
-              </div>
-              <p className="text-sm text-zinc-400 font-medium">Team management coming soon...</p>
-              <p className="text-xs text-zinc-600 mt-1">View and collaborate with your team members</p>
-            </div>
-          </div>
-        )} */}
+        {activeTab === "messages" && <ChatInterface onNavigate={setActiveTab} />}
 
         {activeTab === "files" && <FileManager />}
 
@@ -225,12 +203,17 @@ export default function EmployeeDashboard() {
           onMeetingStateChange={handleMeetingStateChange}
         />
 
-        {/* WhiteboardModule is ALWAYS mounted — hidden via CSS when not on the whiteboard tab */}
-        <WhiteboardModule isVisible={activeTab === "whiteboard"} />
+
 
         {activeTab === "tickets" && (
           <div className="flex-1 p-4 overflow-hidden">
             <EmployeeTicketView />
+          </div>
+        )}
+
+        {activeTab === "global-work" && (
+          <div className="flex-1 overflow-hidden">
+            <CrossCountryCollaborationPanel />
           </div>
         )}
       </main>
