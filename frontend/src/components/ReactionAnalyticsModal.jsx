@@ -35,117 +35,85 @@ const ReactionAnalyticsModal = ({ messageId, channelId, isOpen, onClose }) => {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-96 overflow-hidden flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-zinc-700">
-          <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-            <span className="text-2xl">{analytics?.top_emoji || "😊"}</span>
-            Reaction Analytics
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-lg overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 shadow-xl">
+        <div className="flex items-center justify-between border-b border-zinc-700 px-4 py-3">
+          <h2 className="text-base font-semibold text-white">
+            Reaction Details
           </h2>
           <button
             onClick={onClose}
-            className="text-zinc-400 hover:text-white transition-colors"
+            className="rounded-lg p-1 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
           >
-            <X className="w-5 h-5" />
+            <X className="h-5 w-5" />
           </button>
         </div>
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="max-h-[28rem] space-y-4 overflow-y-auto p-4">
           {loading ? (
-            <div className="flex items-center justify-center h-full">
-              <p className="text-zinc-400">Loading analytics...</p>
-            </div>
+            <p className="text-sm text-zinc-400">Loading...</p>
           ) : analytics && analytics.total_reactions > 0 ? (
             <>
-              {/* Summary Stats */}
-              <div className="grid grid-cols-3 gap-4 mb-4 p-3 bg-zinc-800 rounded-lg">
+              <div className="flex items-center gap-4 rounded-lg bg-zinc-800 px-4 py-3">
                 <div>
-                  <p className="text-xs text-zinc-400 mb-1">Total Reactions</p>
-                  <p className="text-2xl font-bold text-white">
+                  <p className="text-xs text-zinc-500">Total Reactions</p>
+                  <p className="text-xl font-semibold text-white">
                     {analytics.total_reactions}
                   </p>
                 </div>
                 <div>
-                  <p className="text-xs text-zinc-400 mb-1">Unique Emojis</p>
-                  <p className="text-2xl font-bold text-white">
+                  <p className="text-xs text-zinc-500">Emoji Types</p>
+                  <p className="text-xl font-semibold text-white">
                     {analytics.reaction_count}
                   </p>
                 </div>
-                <div>
-                  <p className="text-xs text-zinc-400 mb-1">Reaction Speed</p>
-                  <p className="text-2xl font-bold text-white">
-                    {analytics.reaction_speed_ms
-                      ? `${Math.round(analytics.reaction_speed_ms / 1000)}s`
-                      : "-"}
-                  </p>
-                </div>
               </div>
 
-              {/* Emoji Reactions */}
-              <div>
-                <h3 className="text-sm font-semibold text-zinc-300 mb-3">
-                  Reactions Breakdown
-                </h3>
-                <div className="space-y-2">
-                  {Object.entries(analytics.reactions).map(
-                    ([emoji, reactionData]) => (
-                      <div key={emoji} className="bg-zinc-800 rounded-lg p-3">
-                        {/* Emoji header with count */}
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-2">
-                            <span className="text-2xl">{emoji}</span>
-                            <span className="text-sm font-medium text-zinc-300">
-                              {reactionData.count} {reactionData.count === 1 ? "reaction" : "reactions"}
-                            </span>
-                          </div>
-                          <div className="text-xs text-zinc-500">
-                            {((reactionData.count / analytics.total_reactions) * 100).toFixed(
-                              0
-                            )}
-                            %
-                          </div>
-                        </div>
-
-                        {/* Progress bar */}
-                        <div className="w-full bg-zinc-700 rounded-full h-2 mb-2 overflow-hidden">
-                          <div
-                            className="bg-indigo-500 h-full transition-all"
-                            style={{
-                              width: `${(reactionData.count / analytics.total_reactions) * 100}%`,
-                            }}
-                          />
-                        </div>
-
-                        {/* User list */}
-                        <div className="text-xs text-zinc-400 space-y-1">
-                          {reactionData.users.map((user, idx) => (
-                            <div key={idx} className="flex items-center justify-between pl-2">
-                              <span>{user.name || user.email}</span>
-                              {reactionData.recent[idx] && (
-                                <span className="opacity-75">
-                                  {new Date(
-                                    reactionData.recent[idx].reacted_at
-                                  ).toLocaleTimeString([], {
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                  })}
-                                </span>
-                              )}
-                            </div>
-                          ))}
+              <div className="space-y-3">
+                {Object.entries(analytics.reactions).map(
+                  ([emoji, reactionData]) => (
+                    <div
+                      key={emoji}
+                      className="rounded-lg border border-zinc-700 bg-zinc-800/70 p-3"
+                    >
+                      <div className="mb-2 flex items-center gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-2xl">{emoji}</span>
+                          <span className="text-sm font-medium text-white">
+                            {reactionData.count}
+                          </span>
                         </div>
                       </div>
-                    )
-                  )}
-                </div>
+
+                      <div className="space-y-2">
+                        {reactionData.users.map((user, idx) => (
+                          <div
+                            key={idx}
+                            className="flex items-center justify-between text-sm"
+                          >
+                            <span className="text-zinc-300">
+                              {user.name || user.email}
+                            </span>
+                            {reactionData.recent[idx] && (
+                              <span className="text-xs text-zinc-500">
+                                {new Date(
+                                  reactionData.recent[idx].reacted_at
+                                ).toLocaleTimeString([], {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                )}
               </div>
             </>
           ) : (
-            <div className="flex items-center justify-center h-full">
-              <p className="text-zinc-400">No reactions yet</p>
-            </div>
+            <p className="text-sm text-zinc-400">No reactions yet</p>
           )}
         </div>
       </div>

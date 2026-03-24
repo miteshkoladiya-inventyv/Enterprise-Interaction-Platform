@@ -5,7 +5,7 @@ import User from "../../models/User.js";
 import { SupportTicket } from "../../models/SupportTicket.js";
 import { getReceiverSocketId, io } from "../../socket/socketServer.js";
 import mongoose from "mongoose";
-import { sendSuccess, sendError, sendCreated, sendForbidden, sendBadRequest, sendServerError } from "../../utils/responseFormatter.js";
+import { sendSuccess, sendError, sendCreated, sendForbidden, sendBadRequest, sendServerError, sendUnauthorized } from "../../utils/responseFormatter.js";
 import { validateChannelName, validateArrayOfIds } from "../../utils/validation.js";
 import { requireChannelAdmin, checkMeetingAccess } from "../../middlewares/auth.js";
 
@@ -21,6 +21,10 @@ export const createChannel = async (req, res) => {
       member_ids,
     } = req.body;
     const userId = req.userId;
+
+    if (!userId) {
+      return sendUnauthorized(res, "Unauthorized");
+    }
 
     // Validate channel type
     if (!["direct", "group", "support", "team"].includes(channel_type)) {
@@ -49,10 +53,14 @@ export const createChannel = async (req, res) => {
     let validatedMemberIds = [];
     if (member_ids?.length) {
       try {
-        validatedMemberIds = validateArrayOfIds(member_ids);
+        validatedMemberIds = [...new Set(validateArrayOfIds(member_ids))];
       } catch (validationError) {
         return sendBadRequest(res, validationError.message);
       }
+    }
+
+    if (channel_type === "group" && validatedMemberIds.length === 0) {
+      return sendBadRequest(res, "Group must include at least one member");
     }
 
     // Create channel
@@ -84,6 +92,10 @@ export const createChannel = async (req, res) => {
       }).select("_id");
 
       const validUserIds = validUsers.map((u) => u._id.toString());
+
+      if (channel_type === "group" && validUserIds.length === 0) {
+        return sendBadRequest(res, "No valid members were selected for the group");
+      }
 
       await Promise.all(
         validUserIds.map(async (memberId) => {
@@ -182,12 +194,20 @@ export const getUserChannels = async (req, res) => {
         );
         const user_role = myMembership ? myMembership.role : null;
 
+        const unreadCount = await Message.countDocuments({
+          channel_id: channel._id,
+          sender_id: { $ne: userId },
+          "seen_by.user_id": { $ne: userId },
+          deleted_at: null,
+        });
+
         return {
           ...channel.toObject(),
           last_message: lastMessage,
           member_count: members.length,
           members,
           user_role,
+          unread_count: unreadCount,
         };
       })
     );

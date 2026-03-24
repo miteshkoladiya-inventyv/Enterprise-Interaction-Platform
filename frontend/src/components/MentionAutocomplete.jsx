@@ -27,10 +27,13 @@ const MentionAutocomplete = ({
 
     console.log("Members available:", groupMembers); // Debug
 
+    const normalizedExcludedUsers = excludedUsers.map((id) => String(id));
+
     // Filter out excluded users
-    let filtered = groupMembers.filter(
-      (user) => !excludedUsers.includes(user._id)
-    );
+    let filtered = groupMembers.filter((user) => {
+      const candidateId = String(user?._id || user?.user_id?._id || user?.user_id || "");
+      return candidateId && !normalizedExcludedUsers.includes(candidateId);
+    });
 
     // If query exists, filter by name/email
     if (query && query.trim().length > 0) {

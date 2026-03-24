@@ -1175,24 +1175,21 @@ const ChatInterface = () => {
     [newMessage],
   );
 
-  // Track @mention queries in message input with debounce to prevent blinking
+  // Track @mention queries only for group chats
   useEffect(() => {
+    if (selectedChat?.channel_type !== "group") {
+      setShowMentionSuggestions(false);
+      setMentionQuery("");
+      return undefined;
+    }
+
     const debounceTimer = setTimeout(() => {
       const atIndex = newMessage.lastIndexOf("@");
       if (atIndex !== -1) {
         const afterAt = newMessage.substring(atIndex + 1);
-        // If there's no space after @, we're typing a mention (including just @ with nothing after)
         if (!afterAt.includes(" ")) {
-          setMentionQuery(afterAt); // Can be empty string when just @ is typed
+          setMentionQuery(afterAt);
           setShowMentionSuggestions(true);
-          console.log(
-            "✅ @mention detected! Query:",
-            afterAt,
-            "Should show:",
-            showMentionSuggestions,
-            "Members:",
-            selectedChat?.members?.length || 0,
-          );
         } else {
           setShowMentionSuggestions(false);
           setMentionQuery("");
@@ -1201,10 +1198,10 @@ const ChatInterface = () => {
         setShowMentionSuggestions(false);
         setMentionQuery("");
       }
-    }, 100); // 100ms debounce prevents rapid state flips when typing/deleting spaces
+    }, 100);
 
     return () => clearTimeout(debounceTimer);
-  }, [newMessage, selectedChat?.members]);
+  }, [newMessage, selectedChat?.channel_type, selectedChat?.members]);
 
   // Show message status tooltip on hover
   const handleStatusHover = async (messageId) => {
@@ -1306,13 +1303,25 @@ const ChatInterface = () => {
   };
 
   const createGroup = async () => {
+    const trimmedGroupName = groupName.trim();
+
+    if (!trimmedGroupName) {
+      toast.error("Group name is required.");
+      return;
+    }
+
+    if (selectedUsers.length < 1) {
+      toast.error("Please add at least one member.");
+      return;
+    }
+
     const payload = {
       channel_type: "group",
-      name: groupName,
+      name: trimmedGroupName,
       country_restriction: countryRestriction || null,
       ticket_id: ticketId || null,
-      department,
-      member_ids: selectedUsers.map((u) => u._id),
+      department: department.trim() || null,
+      member_ids: [...new Set(selectedUsers.map((u) => u._id).filter(Boolean))],
     };
     try {
       setCreateGroupLoading(true);
@@ -1323,8 +1332,16 @@ const ChatInterface = () => {
       setGroupName("");
       setSelectedUsers([]);
       setDepartment("");
+      setCountryRestriction("");
+      setTicketId("");
+      setSearchQuery("");
+      setSearchResults([]);
     } catch (error) {
-      toast.error("Failed to create group. Please try again.");
+      toast.error(
+        error.response?.data?.error ||
+          error.response?.data?.message ||
+          "Failed to create group. Please try again."
+      );
     } finally {
       setCreateGroupLoading(false);
     }
@@ -1868,26 +1885,87 @@ const ChatInterface = () => {
     );
   }, [directChats, userChannel, activeTab, chatSearchQuery]);
 
+  const chatCounts = useMemo(() => {
+    const allChats = [...directChats, ...userChannel].filter(Boolean);
+    const uniqueChats = allChats.filter(
+      (chat, index, self) =>
+        chat?._id && index === self.findIndex((c) => c?._id === chat._id),
+    );
+
+    return {
+      all: uniqueChats.length,
+      direct: uniqueChats.filter((chat) => chat.channel_type === "direct")
+        .length,
+      groups: uniqueChats.filter((chat) => chat.channel_type === "group")
+        .length,
+    };
+  }, [directChats, userChannel]);
+
   const getChatDisplayInfo = (chat = {}) => {
     if (chat.channel_type === "direct")
       return {
         name: chat.other_user?.full_name || "Unknown User",
-        subtitle: chat.other_user?.email || "",
+        subtitle: "",
         initials: `${chat.other_user?.first_name?.[0] || ""}${
           chat.other_user?.last_name?.[0] || ""
         }`,
         isGroup: false,
         profile_picture: chat.other_user?.profile_picture || null,
       };
+
+    const memberCount = chat.member_count || chat.members?.length || 0;
+    const departmentLabel =
+      typeof chat.department === "string"
+        ? chat.department
+        : chat.department?.name || "";
+
     return {
       name: chat.name || "Group Chat",
-      subtitle: `${chat.member_count || 0} members${
-        chat.department ? ` \u00B7 ${chat.department?.name || ""}` : ""
+      subtitle: `${memberCount} ${memberCount === 1 ? "member" : "members"}${
+        departmentLabel ? ` | ${departmentLabel}` : ""
       }`,
       initials: chat.name?.[0] || "G",
       isGroup: true,
       profile_picture: null,
     };
+  };
+
+  const getConversationPreview = (chat = {}) => {
+    const message = chat.last_message;
+
+    if (!message) {
+      return chat.channel_type === "group"
+        ? "No messages yet. Start the team conversation."
+        : "No messages yet. Say hello to begin.";
+    }
+
+    if (message.message_type === "file") return "File shared";
+    if (message.message_type === "call") {
+      return message.call_log?.call_type === "video"
+        ? "Video call activity"
+        : "Audio call activity";
+    }
+
+    return message.content || "New activity";
+  };
+
+  const getConversationTimestamp = (chat = {}) => {
+    const timestamp = chat.last_message?.created_at || chat.created_at;
+    if (!timestamp) return "";
+
+    const date = new Date(timestamp);
+    const now = new Date();
+    const isSameDay =
+      date.getDate() === now.getDate() &&
+      date.getMonth() === now.getMonth() &&
+      date.getFullYear() === now.getFullYear();
+
+    if (isSameDay) return formatTime(timestamp);
+
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    });
   };
 
   const openChannelSettings = () => {
@@ -1931,13 +2009,22 @@ const ChatInterface = () => {
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
-                className={`flex-1 px-2 py-1.5 rounded-md text-xs font-medium transition-all ${
+                className={`flex flex-1 items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium transition-all ${
                   activeTab === tab
                     ? "bg-indigo-500/15 text-indigo-300 shadow-sm"
                     : "text-zinc-500 hover:text-zinc-300"
                 }`}
               >
-                {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                <span>{tab.charAt(0).toUpperCase() + tab.slice(1)}</span>
+                <span
+                  className={`min-w-[18px] rounded-full px-1.5 py-0.5 text-[10px] ${
+                    activeTab === tab
+                      ? "bg-indigo-500/20 text-indigo-200"
+                      : "bg-zinc-800 text-zinc-400"
+                  }`}
+                >
+                  {chatCounts[tab]}
+                </span>
               </button>
             ))}
           </div>
@@ -1973,8 +2060,10 @@ const ChatInterface = () => {
               </p>
               <p className="text-xs text-zinc-600 mt-0.5">
                 {chatSearchQuery
-                  ? "Try different keywords"
-                  : "Start a new chat"}
+                  ? "Try a different name, email, or group title"
+                  : activeTab === "groups"
+                    ? "Create your first group to chat with multiple people"
+                    : "Start a new chat to see conversations here"}
               </p>
             </div>
           ) : (
@@ -1990,17 +2079,17 @@ const ChatInterface = () => {
                     chat._id ?? `${chat.channel_type}-${chat.name ?? "chat"}`
                   }
                   onClick={() => selectChat(chat)}
-                  className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-all border-b border-zinc-800/40 ${
+                  className={`mx-2 mt-2 flex items-start gap-3 rounded-2xl border px-3 py-3 cursor-pointer transition-all ${
                     isActive
-                      ? "bg-indigo-500/10 border-l-2 border-l-indigo-500"
-                      : "hover:bg-zinc-900/80"
+                      ? "border-indigo-500/40 bg-indigo-500/10 shadow-[0_0_0_1px_rgba(99,102,241,0.15)]"
+                      : "border-zinc-800/60 bg-zinc-900/40 hover:border-zinc-700 hover:bg-zinc-900/80"
                   }`}
                 >
                   <div className="relative flex-shrink-0">
                     <div
-                      className={`w-9 h-9 rounded-full flex items-center justify-center font-medium text-xs overflow-hidden ${
+                      className={`w-11 h-11 rounded-2xl flex items-center justify-center font-medium text-xs overflow-hidden ${
                         displayInfo.isGroup
-                          ? "bg-zinc-800 text-zinc-400"
+                          ? "bg-zinc-800 text-zinc-300"
                           : "bg-indigo-500/20 text-indigo-300"
                       }`}
                     >
@@ -2023,71 +2112,77 @@ const ChatInterface = () => {
                     )}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <h3
-                        className={`text-sm truncate ${
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <h3
+                            className={`text-sm truncate ${
+                              chat.unread_count > 0
+                                ? "font-semibold text-zinc-100"
+                                : "font-medium text-zinc-300"
+                            }`}
+                          >
+                            {displayInfo.name}
+                          </h3>
+                          {displayInfo.isGroup ? (
+                            <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
+                              Group
+                            </span>
+                          ) : null}
+                        </div>
+                        {displayInfo.subtitle && !displayInfo.isGroup ? (
+                          <p className="mt-0.5 truncate text-[11px] text-zinc-500">
+                            {displayInfo.subtitle}
+                          </p>
+                        ) : null}
+                      </div>
+                      <span className="shrink-0 pt-0.5 text-[10px] font-medium text-zinc-500">
+                        {getConversationTimestamp(chat)}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex items-center gap-2">
+                      <p
+                        className={`text-xs truncate flex-1 ${
                           chat.unread_count > 0
-                            ? "font-semibold text-zinc-100"
-                            : "font-medium text-zinc-300"
+                            ? "text-zinc-200 font-medium"
+                            : "text-zinc-500"
                         }`}
                       >
-                        {displayInfo.name}
-                      </h3>
-                      {displayInfo.isGroup && (
-                        <span className="text-[10px] text-zinc-500 bg-zinc-800 px-1.5 py-0.5 rounded">
-                          Group
+                        {getConversationPreview(chat)}
+                      </p>
+                      {chat.unread_count > 0 && (
+                        <span className="px-1.5 py-0.5 bg-indigo-600 text-white text-[10px] rounded-full font-semibold min-w-[18px] text-center">
+                          {chat.unread_count > 99 ? "99+" : chat.unread_count}
                         </span>
                       )}
                     </div>
-                    {/* Call indicators */}
-                    {!displayInfo.isGroup &&
-                      chat.other_user &&
-                      audioCall.callState !== "idle" &&
-                      audioCall.remoteUser &&
-                      String(chat.other_user._id) ===
-                        String(audioCall.remoteUser.id) && (
-                        <div className="flex items-center gap-1 mt-0.5">
-                          <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />
-                          <span className="text-[10px] font-medium text-emerald-400">
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {displayInfo.isGroup && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-zinc-800 px-2 py-0.5 text-[10px] text-zinc-400">
+                          <Users className="h-3 w-3" />
+                          {displayInfo.subtitle}
+                        </span>
+                      )}
+                      {!displayInfo.isGroup &&
+                        chat.other_user &&
+                        audioCall.callState !== "idle" &&
+                        audioCall.remoteUser &&
+                        String(chat.other_user._id) ===
+                          String(audioCall.remoteUser.id) && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-300">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
                             On call
                           </span>
-                        </div>
-                      )}
-                    {displayInfo.isGroup &&
-                      chat._id &&
-                      activeGroupCalls[chat._id] && (
-                        <div className="flex items-center gap-1 mt-0.5">
-                          <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />
-                          <span className="text-[10px] font-medium text-emerald-400">
+                        )}
+                      {displayInfo.isGroup &&
+                        chat._id &&
+                        activeGroupCalls[chat._id] && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-300">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
                             Active call
                           </span>
-                        </div>
-                      )}
-                    {chat.last_message && (
-                      <div className="flex items-center gap-1 mt-0.5">
-                        <p
-                          className={`text-xs truncate flex-1 ${
-                            chat.unread_count > 0
-                              ? "text-zinc-200 font-medium"
-                              : "text-zinc-500"
-                          }`}
-                        >
-                          {chat.last_message.message_type === "file"
-                            ? "📎 File"
-                            : chat.last_message.message_type === "call"
-                              ? chat.last_message.call_log?.call_type ===
-                                "video"
-                                ? " Video call"
-                                : " Audio call"
-                              : chat.last_message.content}
-                        </p>
-                        {chat.unread_count > 0 && (
-                          <span className="px-1.5 py-0.5 bg-indigo-600 text-white text-[10px] rounded-full font-semibold min-w-[18px] text-center">
-                            {chat.unread_count > 99 ? "99+" : chat.unread_count}
-                          </span>
                         )}
-                      </div>
-                    )}
+                    </div>
                   </div>
                 </div>
               );
@@ -2143,7 +2238,7 @@ const ChatInterface = () => {
                     {selectedChat.channel_type === "group" ? (
                       <span className="text-zinc-500">{`${selectedChat.member_count || 0} members${
                         selectedChat.department
-                          ? ` · ${selectedChat.department?.name || ""}`
+                          ? ` | ${selectedChat.department?.name || ""}`
                           : ""
                       }`}</span>
                     ) : isUserOnline(selectedChat.other_user?._id) ? (
@@ -3164,13 +3259,8 @@ const ChatInterface = () => {
                     query={mentionQuery}
                     onSelect={handleMentionInsert}
                     isOpen={showMentionSuggestions}
-                    groupMembers={
-                      selectedChat?.channel_type === "group"
-                        ? selectedChat?.members || []
-                        : selectedChat?.other_user
-                          ? [selectedChat.other_user, user]
-                          : []
-                    }
+                    groupMembers={selectedChat?.members || []}
+                    excludedUsers={[user?._id, user?.id].filter(Boolean)}
                     maxResults={12}
                   />
                 )}
@@ -3507,7 +3597,7 @@ const ChatInterface = () => {
 
                   {/* Footer note */}
                   <p className="text-[11px] text-zinc-600 text-center">
-                    Generated by AI · May not capture every detail
+                    Generated by AI | May not capture every detail
                   </p>
                 </div>
               ) : null}
@@ -3601,3 +3691,6 @@ const ChatInterface = () => {
 };
 
 export default ChatInterface;
+
+
+

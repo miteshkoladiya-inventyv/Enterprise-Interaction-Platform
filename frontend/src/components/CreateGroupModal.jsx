@@ -103,7 +103,9 @@ const CreateGroupModal = ({
         <div className="px-5 py-3 border-t border-zinc-700/30">
           <button
             onClick={createGroup}
-            disabled={createGroupLoading || !groupName || selectedUsers.length < 2}
+            disabled={
+              createGroupLoading || !groupName.trim() || selectedUsers.length < 1
+            }
             className="w-full py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
           >
             {createGroupLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Creating...</> : "Create Group"}
