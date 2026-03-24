@@ -160,38 +160,49 @@ export const NotificationListener = () => {
       alert("Failed to send reply: " + data.error);
     });
 
-    // Listen for call accepted
-    socket.on("call:accepted", (data) => {
-      console.log("[NOTIFICATION_LISTENER] ✅ Call accepted by receiver:", data);
-      console.log("[NOTIFICATION_LISTENER] Details:", {
-        acceptedBy: data.acceptedBy,
-        callType: data.callType,
-      });
-      // The UI should now show the call is accepted and can proceed with video/audio
-      // This is handled by the call UI component
-      toast.info(`Your ${data.callType} call was accepted!`);
-    });
+    // Listen for call accepted (audio)
+    const handleCallAccepted = (data) => {
+      console.log("[NOTIFICATION_LISTENER] ✅ Audio call accepted by receiver:", data);
+      toast.info(`Your audio call was accepted!`);
+    };
+    // Listen for call accepted (video)
+    const handleVideoCallAccepted = (data) => {
+      console.log("[NOTIFICATION_LISTENER] ✅ Video call accepted by receiver:", data);
+      toast.info(`Your video call was accepted!`);
+    };
 
-    // Listen for call rejected
-    socket.on("call:rejected", (data) => {
-      console.log("[NOTIFICATION_LISTENER] ❌ Call rejected by receiver:", data);
-      console.log("[NOTIFICATION_LISTENER] Details:", {
-        rejectedBy: data.rejectedBy,
-        callType: data.callType,
-      });
-      // The call was rejected, clear the call UI
-      toast.error(`Your ${data.callType} call was rejected`);
+    // Listen for call rejected (audio)
+    const handleCallRejected = (data) => {
+      console.log("[NOTIFICATION_LISTENER] ❌ Audio call rejected by receiver:", data);
+      toast.error(`Your audio call was rejected`);
 
       // IMPORTANT: Dispatch custom event to tell the call hook to clear state
-      // This ensures the "calling" state is immediately cleared in the UI
       console.log("[NOTIFICATION_LISTENER] 📤 Dispatching call rejection event to hook");
       window.dispatchEvent(new CustomEvent('notification:call-rejection-received', {
         detail: {
-          callType: data.callType,
-          rejectedBy: data.rejectedBy,
+          callType: 'audio',
+          rejectedBy: data.rejectedBy || data.fromUserId,
         }
       }));
-    });
+    };
+    // Listen for call rejected (video)
+    const handleVideoCallRejected = (data) => {
+      console.log("[NOTIFICATION_LISTENER] ❌ Video call rejected by receiver:", data);
+      toast.error(`Your video call was rejected`);
+
+      console.log("[NOTIFICATION_LISTENER] 📤 Dispatching video call rejection event to hook");
+      window.dispatchEvent(new CustomEvent('notification:call-rejection-received', {
+        detail: {
+          callType: 'video',
+          rejectedBy: data.rejectedBy || data.fromUserId,
+        }
+      }));
+    };
+
+    socket.on("call-accepted", handleCallAccepted);
+    socket.on("video-call-accepted", handleVideoCallAccepted);
+    socket.on("call-rejected", handleCallRejected);
+    socket.on("video-call-rejected", handleVideoCallRejected);
 
     // Cleanup listeners on unmount
     return () => {
@@ -200,8 +211,10 @@ export const NotificationListener = () => {
       socket.off("notification:unread-count-updated");
       socket.off("chat:reply-sent");
       socket.off("chat:reply-error");
-      socket.off("call:accepted");
-      socket.off("call:rejected");
+      socket.off("call-accepted", handleCallAccepted);
+      socket.off("video-call-accepted", handleVideoCallAccepted);
+      socket.off("call-rejected", handleCallRejected);
+      socket.off("video-call-rejected", handleVideoCallRejected);
     };
   }, [socket, handleNewNotification, sharedWorkerPort]);
 
@@ -273,33 +286,27 @@ export const NotificationListener = () => {
         );
 
         if (action === "accept") {
-          console.log(`[NOTIFICATION_LISTENER] 📤 Emitting call:accept with sourceId: ${sourceId}`);
+          console.log(`[NOTIFICATION_LISTENER] 📤 Accepting call from notification, sourceId: ${sourceId}`);
 
-          const currentSocket = socketRef.current;
+          try {
+            // Focus the browser tab so the user sees the call UI
+            window.focus();
 
-          if (currentSocket && currentSocket.connected) {
-            try {
-              // Emit socket event to backend to notify caller
-              currentSocket.emit("call:accept", {
-                callId: sourceId, // sourceId is the caller's user ID
+            // Dispatch custom event for the call hook to handle.
+            // The hook's acceptCall() will emit the correct socket event
+            // (audio-call-accept / video-call-accept) AND connect to LiveKit.
+            // We do NOT emit call:accept here to avoid a duplicate accept
+            // signal that causes "Client initiated disconnect".
+            window.dispatchEvent(new CustomEvent('notification:call-accepted', {
+              detail: {
                 callType: callType || "audio",
-              });
-              console.log("[NOTIFICATION_LISTENER] ✅ call:accept emitted with callId:", sourceId);
-
-              // Also dispatch custom event for the UI to handle
-              window.dispatchEvent(new CustomEvent('notification:call-accepted', {
-                detail: {
-                  callType: callType || "audio",
-                  sourceId,
-                  notificationId,
-                }
-              }));
-              console.log("[NOTIFICATION_LISTENER] ✅ Custom event dispatched for UI");
-            } catch (error) {
-              console.error("[NOTIFICATION_LISTENER] ❌ Error in accept flow:", error.message);
-            }
-          } else {
-            console.error("[NOTIFICATION_LISTENER] ❌ Socket not connected!");
+                sourceId,
+                notificationId,
+              }
+            }));
+            console.log("[NOTIFICATION_LISTENER] ✅ Custom event dispatched for UI, tab focused");
+          } catch (error) {
+            console.error("[NOTIFICATION_LISTENER] ❌ Error in accept flow:", error.message);
           }
         } else if (action === "reject") {
           console.log("[NOTIFICATION_LISTENER] 🚫 REJECTING call from notification");

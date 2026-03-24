@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from "react";
 import {
   Search,
   Send,
@@ -134,8 +140,12 @@ const ChatInterface = () => {
   // Phase 3: Message Status Indicators & Reaction Analytics
   const [messageStatus, setMessageStatus] = useState({});
   const [reactionAnalytics, setReactionAnalytics] = useState(null);
-  const [selectedReactionAnalyticsMessage, setSelectedReactionAnalyticsMessage] = useState(null);
-  const [showReactionAnalyticsModal, setShowReactionAnalyticsModal] = useState(false);
+  const [
+    selectedReactionAnalyticsMessage,
+    setSelectedReactionAnalyticsMessage,
+  ] = useState(null);
+  const [showReactionAnalyticsModal, setShowReactionAnalyticsModal] =
+    useState(false);
   const [statusTooltipMessage, setStatusTooltipMessage] = useState(null); // Show status tooltip for specific message
 
   const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
@@ -149,7 +159,7 @@ const ChatInterface = () => {
     try {
       const response = await axios.get(
         `${BACKEND_URL}/ai/chatsummary/${selectedChat._id}`,
-        axiosConfig
+        axiosConfig,
       );
       setSummaryData(response.data);
     } catch (error) {
@@ -172,7 +182,7 @@ const ChatInterface = () => {
         `${BACKEND_URL}/chat/channels/${
           selectedChat._id
         }/messages/search?query=${encodeURIComponent(query)}`,
-        axiosConfig
+        axiosConfig,
       );
       setSearchedMessages(response.data.messages || []);
       setSelectedSearchIndex(0);
@@ -285,7 +295,7 @@ const ChatInterface = () => {
             };
           }
           return channel;
-        })
+        }),
       );
 
       // Also update selectedChat if it's the current channel
@@ -325,7 +335,7 @@ const ChatInterface = () => {
       const channelId = data.channelId || data.channel_id;
       if (!channelId) return;
       setUserChannel((prev) =>
-        prev.filter((c) => String(c._id) !== String(channelId))
+        prev.filter((c) => String(c._id) !== String(channelId)),
       );
       setRemovedFromChannelId(channelId);
     };
@@ -373,7 +383,7 @@ const ChatInterface = () => {
         const { data } = await axios.post(
           `${BACKEND_URL}/call/request`,
           { toUserId: String(toUserId), callType: "audio" },
-          axiosConfig
+          axiosConfig,
         );
         return data;
       } catch (error) {
@@ -386,7 +396,7 @@ const ChatInterface = () => {
         throw error;
       }
     },
-    [token]
+    [token],
   );
 
   const requestVideoCallApi = useCallback(
@@ -395,7 +405,7 @@ const ChatInterface = () => {
         const { data } = await axios.post(
           `${BACKEND_URL}/call/request`,
           { toUserId: String(toUserId), callType: "video" },
-          axiosConfig
+          axiosConfig,
         );
         return data;
       } catch (error) {
@@ -408,29 +418,29 @@ const ChatInterface = () => {
         throw error;
       }
     },
-    [token]
+    [token],
   );
 
   const checkOnlineApi = useCallback(
     async (userId) => {
       const { data } = await axios.get(
         `${BACKEND_URL}/call/online/${userId}`,
-        axiosConfig
+        axiosConfig,
       );
       return data;
     },
-    [token]
+    [token],
   );
 
   const checkUserCallStatusApi = useCallback(
     async (userId) => {
       const { data } = await axios.get(
         `${BACKEND_URL}/call/status/${userId}`,
-        axiosConfig
+        axiosConfig,
       );
       return data;
     },
-    [token]
+    [token],
   );
 
   const getDirectLiveKitTokenApi = useCallback(
@@ -438,15 +448,17 @@ const ChatInterface = () => {
       const { data } = await axios.post(
         `${BACKEND_URL}/call/livekit-token`,
         { toUserId: String(toUserId), callType },
-        axiosConfig
+        axiosConfig,
       );
       return data;
     },
-    [token]
+    [token],
   );
 
   const callContext = useCallContext();
-  const hasGlobalCall = Boolean(callContext?.audioCall && callContext?.videoCall);
+  const hasGlobalCall = Boolean(
+    callContext?.audioCall && callContext?.videoCall,
+  );
 
   const localAudioCall = useAudioCallLiveKit(
     socket,
@@ -454,7 +466,7 @@ const ChatInterface = () => {
     currentUserName,
     requestCallApi,
     getDirectLiveKitTokenApi,
-    !hasGlobalCall
+    !hasGlobalCall,
   );
   const localVideoCall = useVideoCallLiveKit(
     socket,
@@ -462,7 +474,7 @@ const ChatInterface = () => {
     currentUserName,
     requestVideoCallApi,
     getDirectLiveKitTokenApi,
-    !hasGlobalCall
+    !hasGlobalCall,
   );
 
   const audioCall = hasGlobalCall ? callContext.audioCall : localAudioCall;
@@ -474,22 +486,22 @@ const ChatInterface = () => {
       const { data } = await axios.post(
         `${BACKEND_URL}/call/group/start`,
         { channelId },
-        axiosConfig
+        axiosConfig,
       );
       return data;
     },
-    [token]
+    [token],
   );
 
   const getGroupCallStatusApi = useCallback(
     async (channelId) => {
       const { data } = await axios.get(
         `${BACKEND_URL}/call/group/status/${channelId}`,
-        axiosConfig
+        axiosConfig,
       );
       return data;
     },
-    [token]
+    [token],
   );
 
   const joinGroupCallApi = useCallback(
@@ -497,11 +509,11 @@ const ChatInterface = () => {
       const { data } = await axios.post(
         `${BACKEND_URL}/call/group/join`,
         { channelId },
-        axiosConfig
+        axiosConfig,
       );
       return data;
     },
-    [token]
+    [token],
   );
 
   const leaveGroupCallApi = useCallback(
@@ -509,11 +521,11 @@ const ChatInterface = () => {
       const { data } = await axios.post(
         `${BACKEND_URL}/call/group/leave`,
         { channelId },
-        axiosConfig
+        axiosConfig,
       );
       return data;
     },
-    [token]
+    [token],
   );
 
   const getGroupLiveKitTokenApi = useCallback(
@@ -521,11 +533,11 @@ const ChatInterface = () => {
       const { data } = await axios.post(
         `${BACKEND_URL}/call/group/livekit-token`,
         { channelId },
-        axiosConfig
+        axiosConfig,
       );
       return data;
     },
-    [token]
+    [token],
   );
 
   const groupCall = useGroupCallLiveKit(
@@ -536,7 +548,7 @@ const ChatInterface = () => {
     getGroupCallStatusApi,
     joinGroupCallApi,
     leaveGroupCallApi,
-    getGroupLiveKitTokenApi
+    getGroupLiveKitTokenApi,
   );
 
   // Keep ref in sync so socket handlers always see the latest selectedChat
@@ -553,7 +565,7 @@ const ChatInterface = () => {
         channel_type: selectedChat.channel_type,
         members_count: selectedChat?.members?.length,
         members_sample: selectedChat?.members?.slice(0, 2),
-        other_user: selectedChat?.other_user
+        other_user: selectedChat?.other_user,
       });
     }
   }, [selectedChat]);
@@ -602,10 +614,10 @@ const ChatInterface = () => {
     if (!socket || !getGroupCallStatusApi) return;
     const checkAllGroupCalls = async () => {
       const groupChats = userChannel.filter(
-        (chat) => chat.channel_type === "group"
+        (chat) => chat.channel_type === "group",
       );
       const callStatuses = await Promise.allSettled(
-        groupChats.map((chat) => getGroupCallStatusApi(chat._id))
+        groupChats.map((chat) => getGroupCallStatusApi(chat._id)),
       );
       const activeCalls = {};
       callStatuses.forEach((result, index) => {
@@ -725,7 +737,7 @@ const ChatInterface = () => {
     try {
       const response = await axios.get(
         `${BACKEND_URL}/direct_chat/list`,
-        axiosConfig
+        axiosConfig,
       );
       setDirectChats(response.data.chats || []);
     } catch (error) {
@@ -762,7 +774,7 @@ const ChatInterface = () => {
     setSelectedChat((prev) =>
       prev && String(prev._id) === String(channelId)
         ? { ...prev, unread_count: 0 }
-        : prev
+        : prev,
     );
   };
 
@@ -773,7 +785,7 @@ const ChatInterface = () => {
     const unseenMessages = messages.filter(
       (msg) =>
         msg.sender_id !== user?.id &&
-        !msg.seen_by?.some((s) => s.user_id._id === user?.id)
+        !msg.seen_by?.some((s) => s.user_id._id === user?.id),
     );
 
     if (unseenMessages.length > 0) {
@@ -806,7 +818,7 @@ const ChatInterface = () => {
             };
           }
           return msg;
-        })
+        }),
       );
     }
 
@@ -815,7 +827,7 @@ const ChatInterface = () => {
       await axios.post(
         `${BACKEND_URL}/direct_chat/channels/${channelId}/messages/seen`,
         {},
-        axiosConfig
+        axiosConfig,
       );
       clearUnreadCountForChannel(channelId);
     } catch (error) {
@@ -828,7 +840,7 @@ const ChatInterface = () => {
       setLoadingMessages(true);
       const response = await axios.get(
         `${BACKEND_URL}/direct_chat/channels/${channelId}/messages`,
-        axiosConfig
+        axiosConfig,
       );
       setMessages(response.data.messages || []);
     } catch (error) {
@@ -848,7 +860,7 @@ const ChatInterface = () => {
     try {
       const response = await axios.get(
         `${BACKEND_URL}/direct_chat/search?query=${query}`,
-        axiosConfig
+        axiosConfig,
       );
       setSearchResults(response.data.users || []);
     } catch (error) {
@@ -871,7 +883,7 @@ const ChatInterface = () => {
       const response = await axios.post(
         `${BACKEND_URL}/direct_chat/start`,
         { user_id: user._id },
-        axiosConfig
+        axiosConfig,
       );
       if (response.data.channel) {
         if (response.data.is_new) await fetchDirectChats();
@@ -918,7 +930,7 @@ const ChatInterface = () => {
       await axios.post(
         `${BACKEND_URL}/chat/channels/${id}/leave`,
         {},
-        axiosConfig
+        axiosConfig,
       );
       setSelectedChat(null);
     } catch (error) {
@@ -933,7 +945,7 @@ const ChatInterface = () => {
     try {
       await axios.delete(
         `${BACKEND_URL}/chat/messages/${messageId}`,
-        axiosConfig
+        axiosConfig,
       );
       setMessages((prev) => prev.filter((m) => m._id !== messageId));
       toast.success("Message deleted");
@@ -960,7 +972,7 @@ const ChatInterface = () => {
       await axios.put(
         `${BACKEND_URL}/chat/messages/${editingMessageId}`,
         { content: editingMessageContent },
-        axiosConfig
+        axiosConfig,
       );
 
       setMessages((prev) =>
@@ -971,8 +983,8 @@ const ChatInterface = () => {
                 content: editingMessageContent,
                 edited_at: new Date(),
               }
-            : msg
-        )
+            : msg,
+        ),
       );
 
       setShowEditModal(false);
@@ -999,13 +1011,13 @@ const ChatInterface = () => {
           reactions[emoji] = [...(reactions[emoji] || []), userId];
         }
         return { ...msg, reactions };
-      })
+      }),
     );
     try {
       await axios.post(
         `${BACKEND_URL}/direct_chat/messages/${messageId}/reactions`,
         { emoji },
-        axiosConfig
+        axiosConfig,
       );
     } catch (error) {
       console.error("Failed to toggle reaction:", error);
@@ -1029,7 +1041,7 @@ const ChatInterface = () => {
       await axios.post(
         `${BACKEND_URL}/chat/messages/${messageId}/star`,
         {},
-        axiosConfig
+        axiosConfig,
       );
       toast.success("Message starred/unstarred");
     } catch (error) {
@@ -1053,7 +1065,7 @@ const ChatInterface = () => {
       const response = await axios.post(
         `${BACKEND_URL}/chat/channels/${selectedChat._id}/pin/${messageId}`,
         { pin_reason: pinReason },
-        axiosConfig
+        axiosConfig,
       );
       toast.success("Message pinned successfully");
       // Reload pinned messages
@@ -1068,7 +1080,7 @@ const ChatInterface = () => {
     try {
       await axios.delete(
         `${BACKEND_URL}/chat/channels/${selectedChat._id}/pin/${messageId}`,
-        axiosConfig
+        axiosConfig,
       );
       toast.success("Message unpinned successfully");
       // Reload pinned messages
@@ -1084,7 +1096,7 @@ const ChatInterface = () => {
     try {
       const response = await axios.get(
         `${BACKEND_URL}/chat/channels/${selectedChat._id}/pinned`,
-        axiosConfig
+        axiosConfig,
       );
       setPinnedMessages(response.data.data?.pinned_messages || []);
     } catch (error) {
@@ -1092,7 +1104,13 @@ const ChatInterface = () => {
     }
   };
 
-  const saveCallLog = async (channelId, callType, status, durationSecs, participantId) => {
+  const saveCallLog = async (
+    channelId,
+    callType,
+    status,
+    durationSecs,
+    participantId,
+  ) => {
     try {
       await axios.post(
         `${BACKEND_URL}/direct_chat/channels/${channelId}/call-log`,
@@ -1104,7 +1122,7 @@ const ChatInterface = () => {
           ended_at: new Date(),
           participant_id: participantId,
         },
-        axiosConfig
+        axiosConfig,
       );
     } catch (error) {
       console.error("Failed to save call log:", error);
@@ -1127,7 +1145,7 @@ const ChatInterface = () => {
     try {
       await axios.delete(
         `${BACKEND_URL}/direct_chat/channels/${selectedChat._id}/clear`,
-        axiosConfig
+        axiosConfig,
       );
       setMessages([]);
       toast.success("Conversation cleared");
@@ -1135,20 +1153,27 @@ const ChatInterface = () => {
       await getUserChannel();
     } catch (error) {
       toast.error(
-        error.response?.data?.error || "Failed to clear conversation"
+        error.response?.data?.error || "Failed to clear conversation",
       );
     }
   };
 
-  const handleMentionInsert = useCallback((user) => {
-    // Handle both direct and nested user object structures
-    const firstName = user.first_name || user.user_id?.first_name || user.username || "User";
-    const mentionText = `@${firstName}`;
-    const beforeMention = newMessage.substring(0, newMessage.lastIndexOf("@"));
-    setNewMessage(beforeMention + mentionText + " ");
-    setMentionQuery("");
-    setShowMentionSuggestions(false);
-  }, [newMessage]);
+  const handleMentionInsert = useCallback(
+    (user) => {
+      // Handle both direct and nested user object structures
+      const firstName =
+        user.first_name || user.user_id?.first_name || user.username || "User";
+      const mentionText = `@${firstName}`;
+      const beforeMention = newMessage.substring(
+        0,
+        newMessage.lastIndexOf("@"),
+      );
+      setNewMessage(beforeMention + mentionText + " ");
+      setMentionQuery("");
+      setShowMentionSuggestions(false);
+    },
+    [newMessage],
+  );
 
   // Track @mention queries in message input with debounce to prevent blinking
   useEffect(() => {
@@ -1160,7 +1185,14 @@ const ChatInterface = () => {
         if (!afterAt.includes(" ")) {
           setMentionQuery(afterAt); // Can be empty string when just @ is typed
           setShowMentionSuggestions(true);
-          console.log("✅ @mention detected! Query:", afterAt, "Should show:", showMentionSuggestions, "Members:", selectedChat?.members?.length || 0);
+          console.log(
+            "✅ @mention detected! Query:",
+            afterAt,
+            "Should show:",
+            showMentionSuggestions,
+            "Members:",
+            selectedChat?.members?.length || 0,
+          );
         } else {
           setShowMentionSuggestions(false);
           setMentionQuery("");
@@ -1180,7 +1212,7 @@ const ChatInterface = () => {
     try {
       const response = await axios.get(
         `${BACKEND_URL}/chat/messages/${messageId}/status`,
-        axiosConfig
+        axiosConfig,
       );
       setStatusTooltipMessage(messageId);
       setMessageStatus((prev) => ({
@@ -1211,7 +1243,7 @@ const ChatInterface = () => {
       const response = await axios.post(
         `${BACKEND_URL}/direct_chat/channels/${selectedChat._id}/messages`,
         payload,
-        axiosConfig
+        axiosConfig,
       );
       if (response.data.data) {
         // Use functional updater with dedup to avoid overwriting
@@ -1257,7 +1289,8 @@ const ChatInterface = () => {
       weekday: "long",
       month: "long",
       day: "numeric",
-      year: msgDate.getFullYear() !== today.getFullYear() ? "numeric" : undefined,
+      year:
+        msgDate.getFullYear() !== today.getFullYear() ? "numeric" : undefined,
     });
   };
 
@@ -1301,7 +1334,7 @@ const ChatInterface = () => {
     try {
       const response = await axios.get(
         `${BACKEND_URL}/chat/channels`,
-        axiosConfig
+        axiosConfig,
       );
       setUserChannel(response.data.channels);
     } catch (error) {
@@ -1314,15 +1347,15 @@ const ChatInterface = () => {
       const response = await axios.post(
         `${BACKEND_URL}/chat/channels/${channelId}/members`,
         { member_ids: memberIds },
-        axiosConfig
+        axiosConfig,
       );
       if (response.data.added_members?.length > 0)
         toast.success(
-          `Successfully added ${response.data.added_members.length} member(s)`
+          `Successfully added ${response.data.added_members.length} member(s)`,
         );
       if (response.data.errors?.length > 0)
         toast.error(
-          `${response.data.errors.length} member(s) could not be added`
+          `${response.data.errors.length} member(s) could not be added`,
         );
       await getUserChannel();
       return response.data;
@@ -1337,14 +1370,14 @@ const ChatInterface = () => {
       const response = await axios.put(
         `${BACKEND_URL}/chat/channels/${channelId}/members/${memberId}`,
         { role: newRole },
-        axiosConfig
+        axiosConfig,
       );
       toast.success(`Successfully updated member role to ${newRole}`);
       await getUserChannel();
       return response.data;
     } catch (error) {
       toast.error(
-        error.response?.data?.error || "Failed to update member role"
+        error.response?.data?.error || "Failed to update member role",
       );
       throw error;
     }
@@ -1354,7 +1387,7 @@ const ChatInterface = () => {
     try {
       const response = await axios.delete(
         `${BACKEND_URL}/chat/channels/${channelId}/members/${memberId}`,
-        axiosConfig
+        axiosConfig,
       );
       toast.success("Member removed successfully");
       await getUserChannel();
@@ -1404,7 +1437,7 @@ const ChatInterface = () => {
     // ✅ Fix the URL if it's a Cloudinary URL with wrong path
     const fileUrl = getCorrectCloudinaryUrl(
       message.file_url,
-      message.file_type
+      message.file_type,
     );
 
     return (
@@ -1493,7 +1526,7 @@ const ChatInterface = () => {
             if (message_ids.includes(msg._id)) {
               const existingSeen = msg.seen_by || [];
               const alreadySeen = existingSeen.some(
-                (s) => s.user_id._id === seen_by_user_id
+                (s) => s.user_id._id === seen_by_user_id,
               );
 
               if (!alreadySeen) {
@@ -1520,7 +1553,7 @@ const ChatInterface = () => {
               }
             }
             return msg;
-          })
+          }),
         );
       }
 
@@ -1584,10 +1617,10 @@ const ChatInterface = () => {
     const handleChannelNameUpdate = (data) => {
       const { channel_id, name } = data;
       setUserChannel((prev) =>
-        prev.map((ch) => (ch._id === channel_id ? { ...ch, name } : ch))
+        prev.map((ch) => (ch._id === channel_id ? { ...ch, name } : ch)),
       );
       setDirectChats((prev) =>
-        prev.map((ch) => (ch._id === channel_id ? { ...ch, name } : ch))
+        prev.map((ch) => (ch._id === channel_id ? { ...ch, name } : ch)),
       );
       setSelectedChat((prev) => {
         if (prev && prev._id === channel_id) return { ...prev, name };
@@ -1636,8 +1669,10 @@ const ChatInterface = () => {
       if (currentChat && String(currentChat._id) === String(data.channel_id)) {
         setMessages((prev) =>
           prev.map((msg) =>
-            msg._id === data.message_id ? { ...msg, reactions: data.reactions } : msg
-          )
+            msg._id === data.message_id
+              ? { ...msg, reactions: data.reactions }
+              : msg,
+          ),
         );
       }
     };
@@ -1676,7 +1711,9 @@ const ChatInterface = () => {
       const { mentioned_user_id, sender_name, content } = data;
       // Only notify if current user was mentioned
       if (mentioned_user_id === user?.id) {
-        toast.info(`${sender_name} mentioned you: ${content.substring(0, 50)}...`);
+        toast.info(
+          `${sender_name} mentioned you: ${content.substring(0, 50)}...`,
+        );
         setUnreadMentionCount((prev) => prev + 1);
       }
     };
@@ -1710,8 +1747,8 @@ const ChatInterface = () => {
                   },
                 ],
               }
-            : msg
-        )
+            : msg,
+        ),
       );
     };
     socket.on("message:reaction-added", handleReactionAdded);
@@ -1725,11 +1762,11 @@ const ChatInterface = () => {
                 ...msg,
                 reactions: (msg.reactions || []).filter(
                   (r) =>
-                    !(r.emoji === data.emoji && r.user_id === data.user_id)
+                    !(r.emoji === data.emoji && r.user_id === data.user_id),
                 ),
               }
-            : msg
-        )
+            : msg,
+        ),
       );
     };
     socket.on("message:reaction-removed", handleReactionRemoved);
@@ -1804,16 +1841,16 @@ const ChatInterface = () => {
     const allChats = [...directChats, ...userChannel].filter(Boolean);
     const uniqueChats = allChats.filter(
       (chat, index, self) =>
-        chat?._id && index === self.findIndex((c) => c?._id === chat._id)
+        chat?._id && index === self.findIndex((c) => c?._id === chat._id),
     );
     let filteredByTab = uniqueChats;
     if (activeTab === "direct")
       filteredByTab = uniqueChats.filter(
-        (chat) => chat.channel_type === "direct"
+        (chat) => chat.channel_type === "direct",
       );
     else if (activeTab === "groups")
       filteredByTab = uniqueChats.filter(
-        (chat) => chat.channel_type === "group"
+        (chat) => chat.channel_type === "group",
       );
     if (chatSearchQuery.trim()) {
       const query = chatSearchQuery.toLowerCase();
@@ -1826,7 +1863,9 @@ const ChatInterface = () => {
         return (chat.name?.toLowerCase() || "").includes(query);
       });
     }
-    return sortChatsByLastMessage(filteredByTab).filter((chat) => chat && chat._id);
+    return sortChatsByLastMessage(filteredByTab).filter(
+      (chat) => chat && chat._id,
+    );
   }, [directChats, userChannel, activeTab, chatSearchQuery]);
 
   const getChatDisplayInfo = (chat = {}) => {
@@ -1960,7 +1999,9 @@ const ChatInterface = () => {
                   <div className="relative flex-shrink-0">
                     <div
                       className={`w-9 h-9 rounded-full flex items-center justify-center font-medium text-xs overflow-hidden ${
-                        displayInfo.isGroup ? "bg-zinc-800 text-zinc-400" : "bg-indigo-500/20 text-indigo-300"
+                        displayInfo.isGroup
+                          ? "bg-zinc-800 text-zinc-400"
+                          : "bg-indigo-500/20 text-indigo-300"
                       }`}
                     >
                       {displayInfo.isGroup ? (
@@ -2031,7 +2072,14 @@ const ChatInterface = () => {
                               : "text-zinc-500"
                           }`}
                         >
-                          {chat.last_message.message_type === "file" ? "📎 File" : chat.last_message.message_type === "call" ? (chat.last_message.call_log?.call_type === "video" ? " Video call" : " Audio call") : chat.last_message.content}
+                          {chat.last_message.message_type === "file"
+                            ? "📎 File"
+                            : chat.last_message.message_type === "call"
+                              ? chat.last_message.call_log?.call_type ===
+                                "video"
+                                ? " Video call"
+                                : " Audio call"
+                              : chat.last_message.content}
                         </p>
                         {chat.unread_count > 0 && (
                           <span className="px-1.5 py-0.5 bg-indigo-600 text-white text-[10px] rounded-full font-semibold min-w-[18px] text-center">
@@ -2053,339 +2101,344 @@ const ChatInterface = () => {
         <div className="flex-1 flex flex-col bg-zinc-900/50">
           {/* Chat Header */}
           <div className="relative">
-          <div className="h-14 px-4 border-b border-zinc-800/60 bg-zinc-950/90 backdrop-blur-sm flex items-center justify-between flex-shrink-0">
-            <div className="flex items-center gap-3">
-              <div className="relative">
-                <div
-                  className={`w-9 h-9 rounded-full flex items-center justify-center font-medium text-xs overflow-hidden ${
-                    selectedChat.channel_type === "group"
-                      ? "bg-zinc-800 text-zinc-400"
-                      : "bg-indigo-500/20 text-indigo-300"
-                  }`}
-                >
-                  {selectedChat.channel_type === "group" ? (
-                    <Users className="w-4 h-4" />
-                  ) : selectedChat.other_user?.profile_picture ? (
-                    <img
-                      src={selectedChat.other_user.profile_picture}
-                      alt=""
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <>
-                      {selectedChat.other_user?.first_name?.[0]}
-                      {selectedChat.other_user?.last_name?.[0]}
-                    </>
-                  )}
+            <div className="h-14 px-4 border-b border-zinc-800/60 bg-zinc-950/90 backdrop-blur-sm flex items-center justify-between flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="relative">
+                  <div
+                    className={`w-9 h-9 rounded-full flex items-center justify-center font-medium text-xs overflow-hidden ${
+                      selectedChat.channel_type === "group"
+                        ? "bg-zinc-800 text-zinc-400"
+                        : "bg-indigo-500/20 text-indigo-300"
+                    }`}
+                  >
+                    {selectedChat.channel_type === "group" ? (
+                      <Users className="w-4 h-4" />
+                    ) : selectedChat.other_user?.profile_picture ? (
+                      <img
+                        src={selectedChat.other_user.profile_picture}
+                        alt=""
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <>
+                        {selectedChat.other_user?.first_name?.[0]}
+                        {selectedChat.other_user?.last_name?.[0]}
+                      </>
+                    )}
+                  </div>
+                  {selectedChat.channel_type === "direct" &&
+                    isUserOnline(selectedChat.other_user?._id) && (
+                      <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-zinc-950">
+                        <div className="absolute inset-0 bg-emerald-400 rounded-full animate-ping opacity-40" />
+                      </div>
+                    )}
                 </div>
-                {selectedChat.channel_type === "direct" &&
-                  isUserOnline(selectedChat.other_user?._id) && (
-                    <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-zinc-950">
-                      <div className="absolute inset-0 bg-emerald-400 rounded-full animate-ping opacity-40" />
-                    </div>
-                  )}
-              </div>
-              <div>
-                <h3 className="text-sm font-semibold text-zinc-100">
-                  {selectedChat.channel_type === "group"
-                    ? selectedChat.name
-                    : selectedChat.other_user?.full_name}
-                </h3>
-                <p className="text-xs">
-                  {selectedChat.channel_type === "group"
-                    ? <span className="text-zinc-500">{`${selectedChat.member_count || 0} members${
+                <div>
+                  <h3 className="text-sm font-semibold text-zinc-100">
+                    {selectedChat.channel_type === "group"
+                      ? selectedChat.name
+                      : selectedChat.other_user?.full_name}
+                  </h3>
+                  <p className="text-xs">
+                    {selectedChat.channel_type === "group" ? (
+                      <span className="text-zinc-500">{`${selectedChat.member_count || 0} members${
                         selectedChat.department
                           ? ` · ${selectedChat.department?.name || ""}`
                           : ""
                       }`}</span>
-                    : isUserOnline(selectedChat.other_user?._id)
-                    ? <span className="text-emerald-400 flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />Active now</span>
-                    : <span className="text-zinc-500">Offline</span>}
-                </p>
+                    ) : isUserOnline(selectedChat.other_user?._id) ? (
+                      <span className="text-emerald-400 flex items-center gap-1">
+                        <span className="inline-block w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />
+                        Active now
+                      </span>
+                    ) : (
+                      <span className="text-zinc-500">Offline</span>
+                    )}
+                  </p>
+                </div>
               </div>
-            </div>
 
-            <div className="flex items-center gap-1">
-              {/* Search Button */}
-              <button
-                onClick={() => setShowMessageSearch(!showMessageSearch)}
-                className={`p-1.5 rounded-lg transition-all ${
-                  showMessageSearch
-                    ? "bg-indigo-600 text-white"
-                    : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-                }`}
-                title="Search messages"
-              >
-                <Search className="w-4 h-4" />
-              </button>
-              <button
-                onClick={fetchChatSummary}
-                className="p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 rounded-lg transition-all"
-                title="Summarize unseen messages"
-              >
-                <Sparkles className="w-4 h-4" />
-              </button>
-              {selectedChat.channel_type === "direct" &&
-                selectedChat.other_user && (
-                  <>
-                    <button
-                      onClick={async () => {
-                        if (!isUserOnline(selectedChat.other_user._id)) {
-                          toast.error("User is offline", { duration: 1500 });
-                          return;
-                        }
-                        if (groupCall.groupCallState !== "idle") {
-                          toast.error("You are currently in a group call", {
-                            duration: 1500,
-                          });
-                          return;
-                        }
-                        if (
-                          videoCall.callState !== "idle" &&
-                          !(
-                            String(selectedChat.other_user._id) ===
-                            String(videoCall.remoteUser?.id)
-                          )
-                        ) {
-                          toast.error("You are already in a call", {
-                            duration: 1500,
-                          });
-                          return;
-                        }
-                        try {
-                          const callStatus = await checkUserCallStatusApi(
-                            selectedChat.other_user._id
-                          );
-                          if (callStatus.inCall) {
-                            toast.error(
-                              `${
-                                selectedChat.other_user.first_name ||
-                                "This person"
-                              } is on a call`,
-                              { duration: 1500 }
-                            );
-                            return;
-                          }
-                          audioCall.startCall(
-                            String(selectedChat.other_user._id),
-                            selectedChat.other_user.full_name ||
-                              `${selectedChat.other_user.first_name || ""} ${
-                                selectedChat.other_user.last_name || ""
-                              }`.trim()
-                          );
-                        } catch (error) {
-                          audioCall.startCall(
-                            String(selectedChat.other_user._id),
-                            selectedChat.other_user.full_name ||
-                              `${selectedChat.other_user.first_name || ""} ${
-                                selectedChat.other_user.last_name || ""
-                              }`.trim()
-                          );
-                        }
-                      }}
-                      disabled={
-                        audioCall.callState !== "idle" ||
-                        videoCall.callState !== "idle" ||
-                        !socket ||
-                        groupCall.groupCallState !== "idle" ||
-                        !isUserOnline(selectedChat.other_user._id)
-                      }
-                      className="p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 rounded-lg transition-all disabled:opacity-40"
-                      title={
-                        !isUserOnline(selectedChat.other_user._id)
-                          ? "User is offline"
-                          : groupCall.groupCallState !== "idle"
-                          ? "You are in a group call"
-                          : videoCall.callState !== "idle"
-                          ? "You are in a video call"
-                          : audioCall.callState !== "idle"
-                          ? "You are in a call"
-                          : "Audio call"
-                      }
-                    >
-                      <Phone className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={async () => {
-                        if (!isUserOnline(selectedChat.other_user._id)) {
-                          toast.error("User is offline", { duration: 1500 });
-                          return;
-                        }
-                        if (groupCall.groupCallState !== "idle") {
-                          toast.error("You are currently in a group call", {
-                            duration: 1500,
-                          });
-                          return;
-                        }
-                        if (
-                          audioCall.callState !== "idle" &&
-                          !(
-                            String(selectedChat.other_user._id) ===
-                            String(audioCall.remoteUser?.id)
-                          )
-                        ) {
-                          toast.error("You are already in a call", {
-                            duration: 1500,
-                          });
-                          return;
-                        }
-                        if (
-                          videoCall.callState !== "idle" &&
-                          !(
-                            String(selectedChat.other_user._id) ===
-                            String(videoCall.remoteUser?.id)
-                          )
-                        ) {
-                          toast.error("You are already in a call", {
-                            duration: 1500,
-                          });
-                          return;
-                        }
-                        try {
-                          const callStatus = await checkUserCallStatusApi(
-                            selectedChat.other_user._id
-                          );
-                          if (callStatus.inCall) {
-                            toast.error(
-                              `${
-                                selectedChat.other_user.first_name ||
-                                "This person"
-                              } is on a call`,
-                              { duration: 1500 }
-                            );
-                            return;
-                          }
-                          videoCall.startCall(
-                            String(selectedChat.other_user._id),
-                            selectedChat.other_user.full_name ||
-                              `${selectedChat.other_user.first_name || ""} ${
-                                selectedChat.other_user.last_name || ""
-                              }`.trim()
-                          );
-                        } catch (error) {
-                          console.error("Error checking call status:", error);
-                          videoCall.startCall(
-                            String(selectedChat.other_user._id),
-                            selectedChat.other_user.full_name ||
-                              `${selectedChat.other_user.first_name || ""} ${
-                                selectedChat.other_user.last_name || ""
-                              }`.trim()
-                          );
-                        }
-                      }}
-                      disabled={
-                        (audioCall.callState !== "idle" &&
-                          !(
-                            selectedChat.channel_type === "direct" &&
-                            selectedChat.other_user &&
-                            String(selectedChat.other_user._id) ===
-                              String(audioCall.remoteUser?.id)
-                          )) ||
-                        (videoCall.callState !== "idle" &&
-                          !(
-                            selectedChat.channel_type === "direct" &&
-                            selectedChat.other_user &&
-                            String(selectedChat.other_user._id) ===
-                              String(videoCall.remoteUser?.id)
-                          )) ||
-                        groupCall.groupCallState !== "idle" ||
-                        !isUserOnline(selectedChat.other_user._id)
-                      }
-                      className="p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 rounded-lg transition-all disabled:opacity-40"
-                      title={
-                        !isUserOnline(selectedChat.other_user._id)
-                          ? "User is offline"
-                          : groupCall.groupCallState !== "idle"
-                          ? "You are in a group call"
-                          : videoCall.callState !== "idle" &&
-                            String(selectedChat.other_user._id) !==
-                              String(videoCall.remoteUser?.id)
-                          ? "You are in a video call"
-                          : audioCall.callState !== "idle" &&
-                            String(selectedChat.other_user._id) !==
-                              String(audioCall.remoteUser?.id)
-                          ? "You are in a call"
-                          : "Video call"
-                      }
-                    >
-                      <Video className="w-4 h-4" />
-                    </button>
-                  </>
-                )}
-              {selectedChat.channel_type === "group" && (
-                <>
-                  <button
-                    onClick={() =>
-                      groupCall.startGroupCall(
-                        selectedChat._id,
-                        selectedChat.name
-                      )
-                    }
-                    disabled={
-                      groupCall.groupCallState !== "idle" ||
-                      audioCall.callState !== "idle" ||
-                      videoCall.callState !== "idle"
-                    }
-                    className="p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 rounded-lg transition-all disabled:opacity-40"
-                    title="Start video call"
-                  >
-                    <Video className="w-4 h-4" />
-                  </button>
-                  {groupCall.groupCallState === "idle" &&
-                    !groupCallStatus?.active &&
-                    selectedChat.user_role === "admin" && (
+              <div className="flex items-center gap-1">
+                {/* Search Button */}
+                <button
+                  onClick={() => setShowMessageSearch(!showMessageSearch)}
+                  className={`p-1.5 rounded-lg transition-all ${
+                    showMessageSearch
+                      ? "bg-indigo-600 text-white"
+                      : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                  }`}
+                  title="Search messages"
+                >
+                  <Search className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={fetchChatSummary}
+                  className="p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 rounded-lg transition-all"
+                  title="Summarize unseen messages"
+                >
+                  <Sparkles className="w-4 h-4" />
+                </button>
+                {selectedChat.channel_type === "direct" &&
+                  selectedChat.other_user && (
+                    <>
                       <button
-                        onClick={() =>
-                          groupCall.startGroupCall(
-                            selectedChat._id,
-                            selectedChat.name
-                          )
-                        }
+                        onClick={async () => {
+                          if (!isUserOnline(selectedChat.other_user._id)) {
+                            toast.error("User is offline", { duration: 1500 });
+                            return;
+                          }
+                          if (groupCall.groupCallState !== "idle") {
+                            toast.error("You are currently in a group call", {
+                              duration: 1500,
+                            });
+                            return;
+                          }
+                          if (
+                            videoCall.callState !== "idle" &&
+                            !(
+                              String(selectedChat.other_user._id) ===
+                              String(videoCall.remoteUser?.id)
+                            )
+                          ) {
+                            toast.error("You are already in a call", {
+                              duration: 1500,
+                            });
+                            return;
+                          }
+                          try {
+                            const callStatus = await checkUserCallStatusApi(
+                              selectedChat.other_user._id,
+                            );
+                            if (callStatus.inCall) {
+                              toast.error(
+                                `${
+                                  selectedChat.other_user.first_name ||
+                                  "This person"
+                                } is on a call`,
+                                { duration: 1500 },
+                              );
+                              return;
+                            }
+                            audioCall.startCall(
+                              String(selectedChat.other_user._id),
+                              selectedChat.other_user.full_name ||
+                                `${selectedChat.other_user.first_name || ""} ${
+                                  selectedChat.other_user.last_name || ""
+                                }`.trim(),
+                            );
+                          } catch (error) {
+                            audioCall.startCall(
+                              String(selectedChat.other_user._id),
+                              selectedChat.other_user.full_name ||
+                                `${selectedChat.other_user.first_name || ""} ${
+                                  selectedChat.other_user.last_name || ""
+                                }`.trim(),
+                            );
+                          }
+                        }}
                         disabled={
+                          audioCall.callState !== "idle" ||
+                          videoCall.callState !== "idle" ||
                           !socket ||
                           groupCall.groupCallState !== "idle" ||
-                          audioCall.callState !== "idle"
+                          !isUserOnline(selectedChat.other_user._id)
                         }
                         className="p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 rounded-lg transition-all disabled:opacity-40"
+                        title={
+                          !isUserOnline(selectedChat.other_user._id)
+                            ? "User is offline"
+                            : groupCall.groupCallState !== "idle"
+                              ? "You are in a group call"
+                              : videoCall.callState !== "idle"
+                                ? "You are in a video call"
+                                : audioCall.callState !== "idle"
+                                  ? "You are in a call"
+                                  : "Audio call"
+                        }
                       >
                         <Phone className="w-4 h-4" />
                       </button>
-                    )}
+                      <button
+                        onClick={async () => {
+                          if (!isUserOnline(selectedChat.other_user._id)) {
+                            toast.error("User is offline", { duration: 1500 });
+                            return;
+                          }
+                          if (groupCall.groupCallState !== "idle") {
+                            toast.error("You are currently in a group call", {
+                              duration: 1500,
+                            });
+                            return;
+                          }
+                          if (
+                            audioCall.callState !== "idle" &&
+                            !(
+                              String(selectedChat.other_user._id) ===
+                              String(audioCall.remoteUser?.id)
+                            )
+                          ) {
+                            toast.error("You are already in a call", {
+                              duration: 1500,
+                            });
+                            return;
+                          }
+                          if (
+                            videoCall.callState !== "idle" &&
+                            !(
+                              String(selectedChat.other_user._id) ===
+                              String(videoCall.remoteUser?.id)
+                            )
+                          ) {
+                            toast.error("You are already in a call", {
+                              duration: 1500,
+                            });
+                            return;
+                          }
+                          try {
+                            const callStatus = await checkUserCallStatusApi(
+                              selectedChat.other_user._id,
+                            );
+                            if (callStatus.inCall) {
+                              toast.error(
+                                `${
+                                  selectedChat.other_user.first_name ||
+                                  "This person"
+                                } is on a call`,
+                                { duration: 1500 },
+                              );
+                              return;
+                            }
+                            videoCall.startCall(
+                              String(selectedChat.other_user._id),
+                              selectedChat.other_user.full_name ||
+                                `${selectedChat.other_user.first_name || ""} ${
+                                  selectedChat.other_user.last_name || ""
+                                }`.trim(),
+                            );
+                          } catch (error) {
+                            console.error("Error checking call status:", error);
+                            videoCall.startCall(
+                              String(selectedChat.other_user._id),
+                              selectedChat.other_user.full_name ||
+                                `${selectedChat.other_user.first_name || ""} ${
+                                  selectedChat.other_user.last_name || ""
+                                }`.trim(),
+                            );
+                          }
+                        }}
+                        disabled={
+                          (audioCall.callState !== "idle" &&
+                            !(
+                              selectedChat.channel_type === "direct" &&
+                              selectedChat.other_user &&
+                              String(selectedChat.other_user._id) ===
+                                String(audioCall.remoteUser?.id)
+                            )) ||
+                          (videoCall.callState !== "idle" &&
+                            !(
+                              selectedChat.channel_type === "direct" &&
+                              selectedChat.other_user &&
+                              String(selectedChat.other_user._id) ===
+                                String(videoCall.remoteUser?.id)
+                            )) ||
+                          groupCall.groupCallState !== "idle" ||
+                          !isUserOnline(selectedChat.other_user._id)
+                        }
+                        className="p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 rounded-lg transition-all disabled:opacity-40"
+                        title={
+                          !isUserOnline(selectedChat.other_user._id)
+                            ? "User is offline"
+                            : groupCall.groupCallState !== "idle"
+                              ? "You are in a group call"
+                              : videoCall.callState !== "idle" &&
+                                  String(selectedChat.other_user._id) !==
+                                    String(videoCall.remoteUser?.id)
+                                ? "You are in a video call"
+                                : audioCall.callState !== "idle" &&
+                                    String(selectedChat.other_user._id) !==
+                                      String(audioCall.remoteUser?.id)
+                                  ? "You are in a call"
+                                  : "Video call"
+                        }
+                      >
+                        <Video className="w-4 h-4" />
+                      </button>
+                    </>
+                  )}
+                {selectedChat.channel_type === "group" && (
+                  <>
+                    <button
+                      onClick={() =>
+                        groupCall.startGroupCall(
+                          selectedChat._id,
+                          selectedChat.name,
+                        )
+                      }
+                      disabled={
+                        groupCall.groupCallState !== "idle" ||
+                        audioCall.callState !== "idle" ||
+                        videoCall.callState !== "idle"
+                      }
+                      className="p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 rounded-lg transition-all disabled:opacity-40"
+                      title="Start video call"
+                    >
+                      <Video className="w-4 h-4" />
+                    </button>
+                    {groupCall.groupCallState === "idle" &&
+                      !groupCallStatus?.active &&
+                      selectedChat.user_role === "admin" && (
+                        <button
+                          onClick={() =>
+                            groupCall.startGroupCall(
+                              selectedChat._id,
+                              selectedChat.name,
+                            )
+                          }
+                          disabled={
+                            !socket ||
+                            groupCall.groupCallState !== "idle" ||
+                            audioCall.callState !== "idle"
+                          }
+                          className="p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 rounded-lg transition-all disabled:opacity-40"
+                        >
+                          <Phone className="w-4 h-4" />
+                        </button>
+                      )}
+                    <button
+                      onClick={openChannelSettings}
+                      className="p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 rounded-lg transition-all"
+                    >
+                      <Settings className="w-4 h-4" />
+                    </button>
+                  </>
+                )}
+                {selectedChat?.member_count > 2 && (
                   <button
-                    onClick={openChannelSettings}
-                    className="p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 rounded-lg transition-all"
+                    onClick={() => leaveGroup(selectedChat._id)}
+                    className="p-1.5 text-zinc-500 hover:bg-red-500/10 hover:text-red-400 rounded-lg transition-all"
                   >
-                    <Settings className="w-4 h-4" />
+                    <Trash className="w-4 h-4" />
                   </button>
-                </>
-              )}
-              {selectedChat?.member_count > 2 && (
+                )}
                 <button
-                  onClick={() => leaveGroup(selectedChat._id)}
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        "Are you sure you want to clear all messages in this conversation? This cannot be undone.",
+                      )
+                    ) {
+                      handleClearConversation();
+                    }
+                  }}
                   className="p-1.5 text-zinc-500 hover:bg-red-500/10 hover:text-red-400 rounded-lg transition-all"
+                  title="Clear conversation"
                 >
-                  <Trash className="w-4 h-4" />
+                  <Eraser className="w-4 h-4" />
                 </button>
-              )}
-              <button
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      "Are you sure you want to clear all messages in this conversation? This cannot be undone."
-                    )
-                  ) {
-                    handleClearConversation();
-                  }
-                }}
-                className="p-1.5 text-zinc-500 hover:bg-red-500/10 hover:text-red-400 rounded-lg transition-all"
-                title="Clear conversation"
-              >
-                <Eraser className="w-4 h-4" />
-              </button>
+              </div>
             </div>
-          </div>
-          {/* Header accent line */}
-          <div className="h-[2px] bg-gradient-to-r from-indigo-600/60 via-purple-500/40 to-transparent" />
+            {/* Header accent line */}
+            <div className="h-[2px] bg-gradient-to-r from-indigo-600/60 via-purple-500/40 to-transparent" />
           </div>
 
           {/* Message Search Bar */}
@@ -2509,7 +2562,7 @@ const ChatInterface = () => {
                       : groupCallStatus.initiatorId,
                     groupCall.groupCallState === "incoming"
                       ? groupCall.initiatorName
-                      : groupCallStatus.initiatorName
+                      : groupCallStatus.initiatorName,
                   );
                 }}
                 onDismiss={
@@ -2564,14 +2617,15 @@ const ChatInterface = () => {
                       <div className="flex items-center gap-2">
                         <Pin className="w-4 h-4 text-blue-400" />
                         <span className="text-sm font-semibold text-blue-300">
-                          {pinnedMessages.length} Pinned Message{pinnedMessages.length !== 1 ? 's' : ''}
+                          {pinnedMessages.length} Pinned Message
+                          {pinnedMessages.length !== 1 ? "s" : ""}
                         </span>
                       </div>
                       <button
                         onClick={() => setShowPinnedPanel(!showPinnedPanel)}
                         className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
                       >
-                        {showPinnedPanel ? 'Hide' : 'Show'}
+                        {showPinnedPanel ? "Hide" : "Show"}
                       </button>
                     </div>
                     {showPinnedPanel && (
@@ -2583,19 +2637,29 @@ const ChatInterface = () => {
                           >
                             <div className="flex items-center justify-between mb-1">
                               <span className="font-medium text-zinc-300">
-                                {pinnedMsg.sender?.first_name} {pinnedMsg.sender?.last_name}
+                                {pinnedMsg.sender?.first_name}{" "}
+                                {pinnedMsg.sender?.last_name}
                               </span>
                               {pinnedMsg.pin_reason && (
-                                <span className="text-zinc-500">Pin reason: {pinnedMsg.pin_reason}</span>
+                                <span className="text-zinc-500">
+                                  Pin reason: {pinnedMsg.pin_reason}
+                                </span>
                               )}
                             </div>
-                            <p className="text-zinc-400 break-words line-clamp-2">{pinnedMsg.content}</p>
+                            <p className="text-zinc-400 break-words line-clamp-2">
+                              {pinnedMsg.content}
+                            </p>
                             <div className="flex items-center gap-2 mt-1">
                               <button
                                 onClick={() => {
                                   // Scroll to the message
-                                  const messageEl = document.getElementById(`message-${pinnedMsg._id}`);
-                                  messageEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                  const messageEl = document.getElementById(
+                                    `message-${pinnedMsg._id}`,
+                                  );
+                                  messageEl?.scrollIntoView({
+                                    behavior: "smooth",
+                                    block: "center",
+                                  });
                                 }}
                                 className="text-blue-300 hover:text-blue-200 text-xs"
                               >
@@ -2620,7 +2684,7 @@ const ChatInterface = () => {
                     : "User";
 
                   const isSearchResult = searchedMessages.some(
-                    (m) => m._id === message._id
+                    (m) => m._id === message._id,
                   );
                   const isCurrentSearchResult =
                     searchedMessages.length > 0 &&
@@ -2639,313 +2703,411 @@ const ChatInterface = () => {
                           <div className="flex-1 h-px bg-zinc-800" />
                         </div>
                       )}
-                    {/* Call message rendering */}
-                    {message.message_type === "call" ? (
-                      <div className="flex justify-center">
-                        <div className="flex items-center gap-2.5 px-4 py-2.5 bg-zinc-800/60 border border-zinc-700/40 rounded-xl max-w-xs">
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                            message.call_log?.status === "completed" ? "bg-emerald-500/15" :
-                            message.call_log?.status === "missed" ? "bg-red-500/15" :
-                            message.call_log?.status === "rejected" ? "bg-amber-500/15" : "bg-zinc-700/50"
-                          }`}>
-                            {message.call_log?.status === "completed" ? (
-                              message.call_log?.call_type === "video" ? <Video className="w-4 h-4 text-emerald-400" /> : <Phone className="w-4 h-4 text-emerald-400" />
-                            ) : message.call_log?.status === "missed" ? (
-                              <PhoneMissed className="w-4 h-4 text-red-400" />
-                            ) : message.call_log?.status === "rejected" ? (
-                              <PhoneOff className="w-4 h-4 text-amber-400" />
-                            ) : (
-                              <PhoneOff className="w-4 h-4 text-zinc-400" />
-                            )}
-                          </div>
-                          <div>
-                            <p className="text-xs font-medium text-zinc-200">{message.content}</p>
-                            <p className="text-[10px] text-zinc-500">
-                              {message.is_own ? "You" : senderName} · {formatTime(message.created_at)}
-                            </p>
+                      {/* Call message rendering */}
+                      {message.message_type === "call" ? (
+                        <div className="flex justify-center">
+                          <div className="flex items-center gap-2.5 px-4 py-2.5 bg-zinc-800/60 border border-zinc-700/40 rounded-xl max-w-xs">
+                            <div
+                              className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                                message.call_log?.status === "completed"
+                                  ? "bg-emerald-500/15"
+                                  : message.call_log?.status === "missed"
+                                    ? "bg-red-500/15"
+                                    : message.call_log?.status === "rejected"
+                                      ? "bg-amber-500/15"
+                                      : "bg-zinc-700/50"
+                              }`}
+                            >
+                              {message.call_log?.status === "completed" ? (
+                                message.call_log?.call_type === "video" ? (
+                                  <Video className="w-4 h-4 text-emerald-400" />
+                                ) : (
+                                  <Phone className="w-4 h-4 text-emerald-400" />
+                                )
+                              ) : message.call_log?.status === "missed" ? (
+                                <PhoneMissed className="w-4 h-4 text-red-400" />
+                              ) : message.call_log?.status === "rejected" ? (
+                                <PhoneOff className="w-4 h-4 text-amber-400" />
+                              ) : (
+                                <PhoneOff className="w-4 h-4 text-zinc-400" />
+                              )}
+                            </div>
+                            <div>
+                              <p className="text-xs font-medium text-zinc-200">
+                                {message.content}
+                              </p>
+                              <p className="text-[10px] text-zinc-500">
+                                {message.is_own ? "You" : senderName} ·{" "}
+                                {formatTime(message.created_at)}
+                              </p>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ) : (
-                    <div
-                      id={`message-${message._id}`}
-                      ref={(el) => {
-                        if (isSearchResult) {
-                          searchedMessageRefs.current[message._id] = el;
-                        }
-                      }}
-                      className={`flex ${
-                        message.is_own ? "justify-end" : "justify-start"
-                      } ${isCurrentSearchResult ? "animate-pulse" : ""}`}
-                    >
-                      <div className="group relative max-w-md">
+                      ) : (
                         <div
-                          className={`px-3.5 py-2 rounded-xl text-sm transition-all ${
-                            message.is_own
-                              ? "bg-indigo-600 text-white"
-                              : "bg-zinc-800/80 border border-zinc-700/50 text-zinc-100"
-                          } ${
-                            isCurrentSearchResult
-                              ? "ring-2 ring-yellow-400 ring-offset-2 ring-offset-zinc-900"
-                              : isSearchResult
-                              ? "ring-1 ring-yellow-400/50"
-                              : ""
-                          }`}
+                          id={`message-${message._id}`}
+                          ref={(el) => {
+                            if (isSearchResult) {
+                              searchedMessageRefs.current[message._id] = el;
+                            }
+                          }}
+                          className={`flex ${
+                            message.is_own ? "justify-end" : "justify-start"
+                          } ${isCurrentSearchResult ? "animate-pulse" : ""}`}
                         >
-                          {/* Rest of your existing message rendering... */}
-                          {parentMessage && (
+                          <div className="group relative max-w-md">
                             <div
-                              className={`mb-1.5 pl-2.5 border-l-2 ${
+                              className={`px-3.5 py-2 rounded-xl text-sm transition-all ${
                                 message.is_own
-                                  ? "border-white/40"
-                                  : "border-indigo-400"
-                              } py-0.5`}
+                                  ? "bg-indigo-600 text-white"
+                                  : "bg-zinc-800/80 border border-zinc-700/50 text-zinc-100"
+                              } ${
+                                isCurrentSearchResult
+                                  ? "ring-2 ring-yellow-400 ring-offset-2 ring-offset-zinc-900"
+                                  : isSearchResult
+                                    ? "ring-1 ring-yellow-400/50"
+                                    : ""
+                              }`}
                             >
-                              <p
-                                className={`text-[11px] font-medium ${
-                                  message.is_own
-                                    ? "text-white/70"
-                                    : "text-indigo-400"
-                                }`}
-                              >
-                                {parentMessage.is_own
-                                  ? "You"
-                                  : parentMessage.sender?.first_name || "User"}
+                              {/* Rest of your existing message rendering... */}
+                              {parentMessage && (
+                                <div
+                                  className={`mb-1.5 pl-2.5 border-l-2 ${
+                                    message.is_own
+                                      ? "border-white/40"
+                                      : "border-indigo-400"
+                                  } py-0.5`}
+                                >
+                                  <p
+                                    className={`text-[11px] font-medium ${
+                                      message.is_own
+                                        ? "text-white/70"
+                                        : "text-indigo-400"
+                                    }`}
+                                  >
+                                    {parentMessage.is_own
+                                      ? "You"
+                                      : parentMessage.sender?.first_name ||
+                                        "User"}
+                                  </p>
+                                  <p
+                                    className={`text-[11px] truncate ${
+                                      message.is_own
+                                        ? "text-white/60"
+                                        : "text-zinc-500"
+                                    }`}
+                                  >
+                                    {parentMessage.content}
+                                  </p>
+                                </div>
+                              )}
+                              {!message.is_own &&
+                                selectedChat.channel_type === "group" && (
+                                  <p className="text-[11px] font-semibold text-indigo-400 mb-0.5">
+                                    {senderName}
+                                  </p>
+                                )}
+                              <p className="leading-relaxed">
+                                {message.content}
                               </p>
-                              <p
-                                className={`text-[11px] truncate ${
+                              {renderFileAttachment(message)}
+                              <div
+                                className={`flex items-center gap-1 justify-end mt-1 ${
                                   message.is_own
-                                    ? "text-white/60"
+                                    ? "text-indigo-200/60"
                                     : "text-zinc-500"
                                 }`}
                               >
-                                {parentMessage.content}
-                              </p>
+                                <span className="text-[10px]">
+                                  {formatTime(message.created_at)}
+                                </span>
+                                {message.is_own &&
+                                  (message.seen_count > 0 ? (
+                                    <button
+                                      onClick={() => showSeenByList(message)}
+                                      className="flex items-center gap-0.5 hover:opacity-80"
+                                    >
+                                      <CheckCheck className="w-3 h-3 text-blue-400" />
+                                      {selectedChat?.channel_type === "group" &&
+                                        message.seen_count > 0 && (
+                                          <span className="text-[10px]">
+                                            {message.seen_count}
+                                          </span>
+                                        )}
+                                    </button>
+                                  ) : (
+                                    <Check className="w-3 h-3 text-indigo-200/40" />
+                                  ))}
+                              </div>
                             </div>
-                          )}
-                          {!message.is_own &&
-                            selectedChat.channel_type === "group" && (
-                              <p className="text-[11px] font-semibold text-indigo-400 mb-0.5">
-                                {senderName}
-                              </p>
-                            )}
-                          <p className="leading-relaxed">{message.content}</p>
-                          {renderFileAttachment(message)}
-                          <div
-                            className={`flex items-center gap-1 justify-end mt-1 ${
-                              message.is_own
-                                ? "text-indigo-200/60"
-                                : "text-zinc-500"
-                            }`}
-                          >
-                            <span className="text-[10px]">
-                              {formatTime(message.created_at)}
-                            </span>
+
+                            {/* Phase 3: Message Status Tooltip - Show on hover above info icon */}
                             {message.is_own &&
-                              (message.seen_count > 0 ? (
-                                <button
-                                  onClick={() => showSeenByList(message)}
-                                  className="flex items-center gap-0.5 hover:opacity-80"
-                                >
-                                  <CheckCheck className="w-3 h-3 text-blue-400" />
-                                  {selectedChat?.channel_type === "group" &&
-                                    message.seen_count > 0 && (
-                                      <span className="text-[10px]">
-                                        {message.seen_count}
-                                      </span>
+                              statusTooltipMessage === message._id &&
+                              messageStatus[message._id] && (
+                                <div className="absolute bottom-full right-0 mb-2 bg-zinc-800 border border-zinc-700 rounded-lg p-3 text-xs min-w-max z-50 shadow-lg">
+                                  {/* Delivered Status */}
+                                  <div className="mb-2 pb-2 border-b border-zinc-700">
+                                    <p className="font-semibold text-zinc-300 mb-1 flex items-center">
+                                      <Check className="w-3 h-3 mr-2" />
+                                      Delivered (
+                                      {messageStatus[message._id]
+                                        .delivered_count || 0}
+                                      )
+                                    </p>
+                                    {messageStatus[message._id].delivered_to &&
+                                    messageStatus[message._id].delivered_to
+                                      .length > 0 ? (
+                                      <div className="space-y-1 text-zinc-400">
+                                        {messageStatus[
+                                          message._id
+                                        ].delivered_to.map((user) => (
+                                          <div
+                                            key={user.user_id}
+                                            className="flex justify-between items-center gap-2"
+                                          >
+                                            <span>{user.name}</span>
+                                            <span className="text-xs opacity-75">
+                                              {new Date(
+                                                user.delivered_at,
+                                              ).toLocaleTimeString([], {
+                                                hour: "2-digit",
+                                                minute: "2-digit",
+                                              })}
+                                            </span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <p className="text-zinc-500 italic">
+                                        No one has received this yet
+                                      </p>
                                     )}
-                                </button>
-                              ) : (
-                                <Check className="w-3 h-3 text-indigo-200/40" />
-                              ))}
-                          </div>
-                        </div>
+                                  </div>
 
-                        {/* Phase 3: Message Status Tooltip - Show on hover above info icon */}
-                        {message.is_own && statusTooltipMessage === message._id && messageStatus[message._id] && (
-                          <div className="absolute bottom-full right-0 mb-2 bg-zinc-800 border border-zinc-700 rounded-lg p-3 text-xs min-w-max z-50 shadow-lg">
-                            {/* Delivered Status */}
-                            <div className="mb-2 pb-2 border-b border-zinc-700">
-                              <p className="font-semibold text-zinc-300 mb-1 flex items-center">
-                                <Check className="w-3 h-3 mr-2" />
-                                Delivered ({messageStatus[message._id].delivered_count || 0})
-                              </p>
-                              {messageStatus[message._id].delivered_to && messageStatus[message._id].delivered_to.length > 0 ? (
-                                <div className="space-y-1 text-zinc-400">
-                                  {messageStatus[message._id].delivered_to.map((user) => (
-                                    <div key={user.user_id} className="flex justify-between items-center gap-2">
-                                      <span>{user.name}</span>
-                                      <span className="text-xs opacity-75">
-                                        {new Date(user.delivered_at).toLocaleTimeString([], {
-                                          hour: "2-digit",
-                                          minute: "2-digit",
-                                        })}
-                                      </span>
-                                    </div>
-                                  ))}
+                                  {/* Read Status */}
+                                  <div>
+                                    <p className="font-semibold text-zinc-300 mb-1 flex items-center">
+                                      <CheckCheck className="w-3 h-3 mr-2" />
+                                      Read (
+                                      {messageStatus[message._id].read_count ||
+                                        0}
+                                      )
+                                    </p>
+                                    {messageStatus[message._id].read_by &&
+                                    messageStatus[message._id].read_by.length >
+                                      0 ? (
+                                      <div className="space-y-1 text-zinc-400">
+                                        {messageStatus[message._id].read_by.map(
+                                          (user) => (
+                                            <div
+                                              key={user.user_id}
+                                              className="flex justify-between items-center gap-2"
+                                            >
+                                              <span>{user.name}</span>
+                                              <span className="text-xs opacity-75">
+                                                {new Date(
+                                                  user.read_at,
+                                                ).toLocaleTimeString([], {
+                                                  hour: "2-digit",
+                                                  minute: "2-digit",
+                                                })}
+                                              </span>
+                                            </div>
+                                          ),
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <p className="text-zinc-500 italic">
+                                        No one has read this yet
+                                      </p>
+                                    )}
+                                  </div>
                                 </div>
-                              ) : (
-                                <p className="text-zinc-500 italic">No one has received this yet</p>
                               )}
-                            </div>
 
-                            {/* Read Status */}
-                            <div>
-                              <p className="font-semibold text-zinc-300 mb-1 flex items-center">
-                                <CheckCheck className="w-3 h-3 mr-2" />
-                                Read ({messageStatus[message._id].read_count || 0})
-                              </p>
-                              {messageStatus[message._id].read_by && messageStatus[message._id].read_by.length > 0 ? (
-                                <div className="space-y-1 text-zinc-400">
-                                  {messageStatus[message._id].read_by.map((user) => (
-                                    <div key={user.user_id} className="flex justify-between items-center gap-2">
-                                      <span>{user.name}</span>
-                                      <span className="text-xs opacity-75">
-                                        {new Date(user.read_at).toLocaleTimeString([], {
-                                          hour: "2-digit",
-                                          minute: "2-digit",
-                                        })}
-                                      </span>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <p className="text-zinc-500 italic">No one has read this yet</p>
-                              )}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Message actions on hover */}
-                        <div className={`absolute ${message.is_own ? "left-0 -translate-x-full pr-1" : "right-0 translate-x-full pl-1"} top-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5`}>
-                          <button
-                            onClick={() => setActiveReactionPicker(activeReactionPicker === message._id ? null : message._id)}
-                            className="p-1 hover:bg-zinc-800 rounded text-zinc-500 hover:text-zinc-300 transition-colors"
-                            title="React"
-                          >
-                            <Smile className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleReply(message)}
-                            className="p-1 hover:bg-zinc-800 rounded text-zinc-500 hover:text-zinc-300 transition-colors"
-                            title="Reply"
-                          >
-                            <Reply className="w-3.5 h-3.5" />
-                          </button>
-                          {/* Star button - available to all */}
-                          <button
-                            onClick={() => toggleStarMessage(message._id)}
-                            className={`p-1 hover:bg-yellow-500/10 rounded transition-colors ${starredMessageIds.has(message._id) ? "text-yellow-400" : "text-zinc-500 hover:text-yellow-400"}`}
-                            title={starredMessageIds.has(message._id) ? "Unstar message" : "Star message"}
-                          >
-                            <Star className="w-3.5 h-3.5" fill={starredMessageIds.has(message._id) ? "currentColor" : "none"} />
-                          </button>
-
-                          {/* Pin button - for group chats (admin/moderator check on backend) */}
-                          {selectedChat?.channel_type === "group" && (
-                            <button
-                              onClick={() => {
-                                if (message.is_pinned) {
-                                  handleUnpinMessage(message._id);
-                                } else {
-                                  handlePinMessage(message._id);
+                            {/* Message actions on hover */}
+                            <div
+                              className={`absolute ${message.is_own ? "left-0 -translate-x-full pr-1" : "right-0 translate-x-full pl-1"} top-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5`}
+                            >
+                              <button
+                                onClick={() =>
+                                  setActiveReactionPicker(
+                                    activeReactionPicker === message._id
+                                      ? null
+                                      : message._id,
+                                  )
                                 }
-                              }}
-                              className={`p-1 hover:bg-purple-500/10 rounded transition-colors ${message.is_pinned ? "text-purple-400" : "text-zinc-500 hover:text-purple-400"}`}
-                              title={message.is_pinned ? "Unpin message" : "Pin message (admin only)"}
-                            >
-                              <Pin className="w-3.5 h-3.5" fill={message.is_pinned ? "currentColor" : "none"} />
-                            </button>
-                          )}
-
-                          {/* Phase 3: Reaction Analytics button */}
-                          {message.reactions && Object.keys(message.reactions).length > 0 && (
-                            <button
-                              onClick={() => {
-                                setSelectedReactionAnalyticsMessage(message._id);
-                                setShowReactionAnalyticsModal(true);
-                              }}
-                              className="p-1 hover:bg-indigo-500/10 rounded text-zinc-500 hover:text-indigo-400 transition-colors"
-                              title="View reaction analytics"
-                            >
-                              <Sparkles className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-
-                          {/* Info button to view message status on hover */}
-                          {message.is_own && (
-                            <button
-                              onMouseEnter={() => handleStatusHover(message._id)}
-                              onMouseLeave={handleStatusLeave}
-                              className="p-1 rounded transition-colors text-zinc-500 hover:text-blue-400 hover:bg-blue-500/10"
-                              title="Hover to view message status"
-                            >
-                              <Info className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-
-                          {message.is_own && (
-                            <>
-                              <button
-                                onClick={() => handleEditMessage(message)}
-                                className="p-1 hover:bg-blue-500/10 rounded text-zinc-500 hover:text-blue-400 transition-colors"
-                                title="Edit"
+                                className="p-1 hover:bg-zinc-800 rounded text-zinc-500 hover:text-zinc-300 transition-colors"
+                                title="React"
                               >
-                                <Edit className="w-3.5 h-3.5" />
+                                <Smile className="w-3.5 h-3.5" />
                               </button>
                               <button
-                                onClick={() => handleDeleteMessage(message._id)}
-                                className="p-1 hover:bg-red-500/10 rounded text-zinc-500 hover:text-red-400 transition-colors"
-                                title="Delete"
+                                onClick={() => handleReply(message)}
+                                className="p-1 hover:bg-zinc-800 rounded text-zinc-500 hover:text-zinc-300 transition-colors"
+                                title="Reply"
                               >
-                                <Trash2 className="w-3.5 h-3.5" />
+                                <Reply className="w-3.5 h-3.5" />
                               </button>
-                            </>
-                          )}
+                              {/* Star button - available to all */}
+                              <button
+                                onClick={() => toggleStarMessage(message._id)}
+                                className={`p-1 hover:bg-yellow-500/10 rounded transition-colors ${starredMessageIds.has(message._id) ? "text-yellow-400" : "text-zinc-500 hover:text-yellow-400"}`}
+                                title={
+                                  starredMessageIds.has(message._id)
+                                    ? "Unstar message"
+                                    : "Star message"
+                                }
+                              >
+                                <Star
+                                  className="w-3.5 h-3.5"
+                                  fill={
+                                    starredMessageIds.has(message._id)
+                                      ? "currentColor"
+                                      : "none"
+                                  }
+                                />
+                              </button>
+
+                              {/* Pin button - for group chats (admin/moderator check on backend) */}
+                              {selectedChat?.channel_type === "group" && (
+                                <button
+                                  onClick={() => {
+                                    if (message.is_pinned) {
+                                      handleUnpinMessage(message._id);
+                                    } else {
+                                      handlePinMessage(message._id);
+                                    }
+                                  }}
+                                  className={`p-1 hover:bg-purple-500/10 rounded transition-colors ${message.is_pinned ? "text-purple-400" : "text-zinc-500 hover:text-purple-400"}`}
+                                  title={
+                                    message.is_pinned
+                                      ? "Unpin message"
+                                      : "Pin message (admin only)"
+                                  }
+                                >
+                                  <Pin
+                                    className="w-3.5 h-3.5"
+                                    fill={
+                                      message.is_pinned
+                                        ? "currentColor"
+                                        : "none"
+                                    }
+                                  />
+                                </button>
+                              )}
+
+                              {/* Phase 3: Reaction Analytics button */}
+                              {message.reactions &&
+                                Object.keys(message.reactions).length > 0 && (
+                                  <button
+                                    onClick={() => {
+                                      setSelectedReactionAnalyticsMessage(
+                                        message._id,
+                                      );
+                                      setShowReactionAnalyticsModal(true);
+                                    }}
+                                    className="p-1 hover:bg-indigo-500/10 rounded text-zinc-500 hover:text-indigo-400 transition-colors"
+                                    title="View reaction analytics"
+                                  >
+                                    <Sparkles className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+
+                              {/* Info button to view message status on hover */}
+                              {message.is_own && (
+                                <button
+                                  onMouseEnter={() =>
+                                    handleStatusHover(message._id)
+                                  }
+                                  onMouseLeave={handleStatusLeave}
+                                  className="p-1 rounded transition-colors text-zinc-500 hover:text-blue-400 hover:bg-blue-500/10"
+                                  title="Hover to view message status"
+                                >
+                                  <Info className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+
+                              {message.is_own && (
+                                <>
+                                  <button
+                                    onClick={() => handleEditMessage(message)}
+                                    className="p-1 hover:bg-blue-500/10 rounded text-zinc-500 hover:text-blue-400 transition-colors"
+                                    title="Edit"
+                                  >
+                                    <Edit className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() =>
+                                      handleDeleteMessage(message._id)
+                                    }
+                                    className="p-1 hover:bg-red-500/10 rounded text-zinc-500 hover:text-red-400 transition-colors"
+                                    title="Delete"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                            {/* Reaction picker popup */}
+                            {activeReactionPicker === message._id && (
+                              <div
+                                className={`absolute ${message.is_own ? "right-0" : "left-0"} -top-9 z-10 flex items-center gap-0.5 bg-zinc-800 border border-zinc-700/60 rounded-full px-1.5 py-1 shadow-xl`}
+                              >
+                                {REACTION_EMOJIS.map((emoji) => (
+                                  <button
+                                    key={emoji}
+                                    onClick={() =>
+                                      toggleReaction(message._id, emoji)
+                                    }
+                                    className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-zinc-700 transition-colors text-sm hover:scale-110"
+                                  >
+                                    {emoji}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            {/* Reactions display */}
+                            {message.reactions &&
+                              Object.keys(message.reactions).length > 0 && (
+                                <div
+                                  className={`flex flex-wrap gap-1 mt-1 ${message.is_own ? "justify-end" : "justify-start"}`}
+                                >
+                                  {Object.entries(message.reactions).map(
+                                    ([emoji, userIds]) => (
+                                      <button
+                                        key={emoji}
+                                        onContextMenu={(e) => {
+                                          e.preventDefault();
+                                          // Right-click to view analytics
+                                          setSelectedReactionAnalyticsMessage(
+                                            message._id,
+                                          );
+                                          setShowReactionAnalyticsModal(true);
+                                        }}
+                                        onClick={() =>
+                                          toggleReaction(message._id, emoji)
+                                        }
+                                        className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-xs border transition-colors cursor-pointer ${
+                                          userIds.includes(user?.id)
+                                            ? "bg-indigo-500/20 border-indigo-500/40 text-indigo-300 hover:bg-indigo-500/30"
+                                            : "bg-zinc-800/80 border-zinc-700/40 text-zinc-400 hover:border-zinc-600 hover:bg-zinc-700/80"
+                                        }`}
+                                        title="Click to toggle reaction | Right-click for analytics"
+                                      >
+                                        <span>{emoji}</span>
+                                        <span className="text-[10px] opacity-75">
+                                          {userIds.length}
+                                        </span>
+                                      </button>
+                                    ),
+                                  )}
+                                </div>
+                              )}
+                          </div>
                         </div>
-                        {/* Reaction picker popup */}
-                        {activeReactionPicker === message._id && (
-                          <div className={`absolute ${message.is_own ? "right-0" : "left-0"} -top-9 z-10 flex items-center gap-0.5 bg-zinc-800 border border-zinc-700/60 rounded-full px-1.5 py-1 shadow-xl`}>
-                            {REACTION_EMOJIS.map((emoji) => (
-                              <button
-                                key={emoji}
-                                onClick={() => toggleReaction(message._id, emoji)}
-                                className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-zinc-700 transition-colors text-sm hover:scale-110"
-                              >
-                                {emoji}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                        {/* Reactions display */}
-                        {message.reactions && Object.keys(message.reactions).length > 0 && (
-                          <div className={`flex flex-wrap gap-1 mt-1 ${message.is_own ? "justify-end" : "justify-start"}`}>
-                            {Object.entries(message.reactions).map(([emoji, userIds]) => (
-                              <button
-                                key={emoji}
-                                onContextMenu={(e) => {
-                                  e.preventDefault();
-                                  // Right-click to view analytics
-                                  setSelectedReactionAnalyticsMessage(message._id);
-                                  setShowReactionAnalyticsModal(true);
-                                }}
-                                onClick={() => toggleReaction(message._id, emoji)}
-                                className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-xs border transition-colors cursor-pointer ${
-                                  userIds.includes(user?.id)
-                                    ? "bg-indigo-500/20 border-indigo-500/40 text-indigo-300 hover:bg-indigo-500/30"
-                                    : "bg-zinc-800/80 border-zinc-700/40 text-zinc-400 hover:border-zinc-600 hover:bg-zinc-700/80"
-                                }`}
-                                title="Click to toggle reaction | Right-click for analytics"
-                              >
-                                <span>{emoji}</span>
-                                <span className="text-[10px] opacity-75">{userIds.length}</span>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    )}
+                      )}
                     </React.Fragment>
                   );
                 })}
@@ -3006,14 +3168,17 @@ const ChatInterface = () => {
                       selectedChat?.channel_type === "group"
                         ? selectedChat?.members || []
                         : selectedChat?.other_user
-                        ? [selectedChat.other_user, user]
-                        : []
+                          ? [selectedChat.other_user, user]
+                          : []
                     }
                     maxResults={12}
                   />
                 )}
 
-                <form onSubmit={sendMessage} className="flex items-center gap-2">
+                <form
+                  onSubmit={sendMessage}
+                  className="flex items-center gap-2"
+                >
                   {/* Attach Button */}
                   <Button
                     type="button"
@@ -3036,8 +3201,8 @@ const ChatInterface = () => {
                       !socketConnected
                         ? "Connecting..."
                         : replyingTo
-                        ? "Type your reply...(@ Mention)"
-                        : "Type a message...(@ Mention)"
+                          ? "Type your reply...(@ Mention)"
+                          : "Type a message...(@ Mention)"
                     }
                     disabled={!socketConnected}
                     className="flex-1 h-10 bg-zinc-900/50 border border-zinc-800 hover:border-zinc-700 focus:border-indigo-500/50 placeholder:text-zinc-600 focus:ring-1 focus:ring-indigo-500/20"
@@ -3052,13 +3217,13 @@ const ChatInterface = () => {
                     }
                     className="h-10 w-10 bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-40 flex-shrink-0"
                   >
-                  {sendingMessage ? (
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                  ) : (
-                    <Send className="w-5 h-5" />
-                  )}
-                </Button>
-              </form>
+                    {sendingMessage ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <Send className="w-5 h-5" />
+                    )}
+                  </Button>
+                </form>
               </div>
             </div>
           )}
@@ -3074,7 +3239,7 @@ const ChatInterface = () => {
           <p className="text-sm text-zinc-500 mb-4">
             Choose a chat or start a new one
           </p>
-          <Button 
+          <Button
             onClick={() => setShowSearchModal(true)}
             className="bg-indigo-600 hover:bg-indigo-500 text-white"
           >
@@ -3090,9 +3255,7 @@ const ChatInterface = () => {
             <div className="px-4 py-3 border-b border-zinc-800/60 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Eye className="w-4 h-4 text-indigo-400" />
-                <h3 className="text-sm font-semibold text-zinc-100">
-                  Seen by
-                </h3>
+                <h3 className="text-sm font-semibold text-zinc-100">Seen by</h3>
               </div>
               <Button
                 variant="ghost"
@@ -3308,9 +3471,7 @@ const ChatInterface = () => {
               {summaryLoading ? (
                 <div className="flex flex-col items-center justify-center py-8 gap-3">
                   <Loader2 className="w-6 h-6 text-indigo-400 animate-spin" />
-                  <p className="text-sm text-zinc-500">
-                    Generating summary...
-                  </p>
+                  <p className="text-sm text-zinc-500">Generating summary...</p>
                 </div>
               ) : summaryData?.summary === null ? (
                 <div className="flex flex-col items-center justify-center py-8 gap-2">
@@ -3375,7 +3536,9 @@ const ChatInterface = () => {
             <div className="px-4 py-3 border-b border-zinc-800/60 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Edit className="w-4 h-4 text-blue-400" />
-                <h3 className="text-sm font-semibold text-zinc-100">Edit Message</h3>
+                <h3 className="text-sm font-semibold text-zinc-100">
+                  Edit Message
+                </h3>
               </div>
               <button
                 onClick={() => {
@@ -3433,7 +3596,6 @@ const ChatInterface = () => {
           setSelectedReactionAnalyticsMessage(null);
         }}
       />
-
     </div>
   );
 };

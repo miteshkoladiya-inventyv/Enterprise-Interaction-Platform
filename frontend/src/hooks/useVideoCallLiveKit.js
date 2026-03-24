@@ -319,14 +319,14 @@ export function useVideoCallLiveKit(
     };
 
     socket.on("incoming-video-call", handleIncomingCall);
-    socket.on("call:accepted", handleCallAccepted);
-    socket.on("call:rejected", handleCallRejected);
+    socket.on("video-call-accepted", handleCallAccepted);
+    socket.on("video-call-rejected", handleCallRejected);
     socket.on("video-call-ended", handleCallEnded);
 
     return () => {
       socket.off("incoming-video-call", handleIncomingCall);
-      socket.off("call:accepted", handleCallAccepted);
-      socket.off("call:rejected", handleCallRejected);
+      socket.off("video-call-accepted", handleCallAccepted);
+      socket.off("video-call-rejected", handleCallRejected);
       socket.off("video-call-ended", handleCallEnded);
     };
   }, [

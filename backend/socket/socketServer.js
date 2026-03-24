@@ -1,4 +1,4 @@
-﻿import { Server } from "socket.io";
+import { Server } from "socket.io";
 import express from "express";
 import { createServer } from "http";
 import { Message } from "../models/Message.js";
@@ -1573,13 +1573,16 @@ io.on("connection", async (socket) => {
       console.log(`[CALL_ACCEPT] Caller socket lookup:`, { callId, callerSocketId });
 
       if (callerSocketId) {
-        console.log(`[CALL_ACCEPT] 📤 Sending call:accepted to caller ${callId}`);
-        io.to(callerSocketId).emit("call:accepted", {
+        // Emit the correct event name that the LiveKit hooks listen for
+        const acceptEventName = callType === "video" ? "video-call-accepted" : "call-accepted";
+        console.log(`[CALL_ACCEPT] 📤 Sending ${acceptEventName} to caller ${callId}`);
+        io.to(callerSocketId).emit(acceptEventName, {
+          fromUserId: socket.userId,
           acceptedBy: socket.userId,
           callType,
           timestamp: new Date(),
         });
-        console.log(`[CALL_ACCEPT] ✅ call:accepted emitted successfully`);
+        console.log(`[CALL_ACCEPT] ✅ ${acceptEventName} emitted successfully`);
       } else {
         console.warn(`[CALL_ACCEPT] ⚠️ Caller not online: ${callId}`);
       }
@@ -1603,14 +1606,16 @@ io.on("connection", async (socket) => {
       console.log(`[CALL_REJECT] Caller socket lookup:`, { callId, callerSocketId });
 
       if (callerSocketId) {
-        console.log(`[CALL_REJECT] 📤 Sending call:rejected to caller ${callId}`);
-        io.to(callerSocketId).emit("call:rejected", {
+        // Emit the correct event name that the LiveKit hooks listen for
+        const rejectEventName = callType === "video" ? "video-call-rejected" : "call-rejected";
+        console.log(`[CALL_REJECT] 📤 Sending ${rejectEventName} to caller ${callId}`);
+        io.to(callerSocketId).emit(rejectEventName, {
           fromUserId: socket.userId, // The receiver's ID (for hook to match with remoteUser.id)
           rejectedBy: socket.userId,
           callType,
           timestamp: new Date(),
         });
-        console.log(`[CALL_REJECT] ✅ call:rejected emitted successfully`);
+        console.log(`[CALL_REJECT] ✅ ${rejectEventName} emitted successfully`);
       } else {
         console.warn(`[CALL_REJECT] ⚠️ Caller not online: ${callId}`);
       }

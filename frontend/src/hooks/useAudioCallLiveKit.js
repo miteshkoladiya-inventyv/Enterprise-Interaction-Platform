@@ -307,14 +307,14 @@ export function useAudioCallLiveKit(
     };
 
     socket.on("incoming-audio-call", handleIncomingCall);
-    socket.on("call:accepted", handleCallAccepted);
-    socket.on("call:rejected", handleCallRejected);
+    socket.on("call-accepted", handleCallAccepted);
+    socket.on("call-rejected", handleCallRejected);
     socket.on("call-ended", handleCallEnded);
 
     return () => {
       socket.off("incoming-audio-call", handleIncomingCall);
-      socket.off("call:accepted", handleCallAccepted);
-      socket.off("call:rejected", handleCallRejected);
+      socket.off("call-accepted", handleCallAccepted);
+      socket.off("call-rejected", handleCallRejected);
       socket.off("call-ended", handleCallEnded);
     };
   }, [

@@ -243,11 +243,16 @@ self.addEventListener("notificationclick", (event) => {
               callType: notificationType === "video_call" ? "video" : "audio",
             };
 
-            console.log(`[SERVICE_WORKER] 📤 Posting call action message (NOT focusing):`, messageData);
-            targetClient.postMessage(messageData);
+            // Focus the app tab when accepting so the user sees the call UI
+            if (action === "accept") {
+              console.log(`[SERVICE_WORKER] 📤 Focusing tab and posting accept action`);
+              await targetClient.focus();
+            } else {
+              console.log(`[SERVICE_WORKER] 📤 Posting reject action (no focus needed)`);
+            }
 
-            // DO NOT focus - handle silently in background
-            console.log(`[SERVICE_WORKER] ✅ Call action posted - will be handled in background`);
+            targetClient.postMessage(messageData);
+            console.log(`[SERVICE_WORKER] ✅ Call action posted successfully`);
           } catch (error) {
             console.error("[SERVICE_WORKER] ❌ Error in call action handler:", error);
           }
