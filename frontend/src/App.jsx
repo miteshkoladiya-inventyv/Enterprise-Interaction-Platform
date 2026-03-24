@@ -17,6 +17,9 @@ import ResetPasswordPage from "./pages/ResetPasswordPage";
 import SharedFilePage from "./pages/SharedFilePage";
 
 import AuthContextProvider from "./context/AuthContextProvider";
+import NotificationContextProvider from "./context/NotificationContextProvider";
+import NotificationInitializer from "./components/NotificationInitializer";
+import NotificationListener from "./components/NotificationListener";
 import ProtectedRoute from "./components/ProtectedRoute";
 import PublicRoute from "./components/PublicRoute";
 import AdminProtectedRoute from "./components/AdminProtectedRoute";
@@ -27,117 +30,125 @@ import { Toaster } from "@/components/ui/sonner";
 function App() {
   return (
     <AuthContextProvider>
-      <Routes>
-        {/* PUBLIC ROUTES */}
-        <Route
-          path="/login"
-          element={
-            <PublicRoute>
-              <EmployeeLogin />
-            </PublicRoute>
-          }
-        />
+      <NotificationContextProvider>
+        {/* Initialize notification system on app load */}
+        <NotificationInitializer />
 
-        <Route
-          path="/adminLogin"
-          element={
-            <PublicRoute>
-              <AdminLoginPage />
-            </PublicRoute>
-          }
-        />
+        {/* Invisible listener for notification events */}
+        <NotificationListener />
 
-        {/* CUSTOMER PUBLIC ROUTES */}
-        <Route
-          path="/customer/login"
-          element={
-            <PublicRoute>
-              <CustomerLogin />
-            </PublicRoute>
-          }
-        />
-        <Route
-          path="/customer/register"
-          element={
-            <PublicRoute>
-              <CustomerRegister />
-            </PublicRoute>
-          }
-        />
+        <Routes>
+          {/* PUBLIC ROUTES */}
+          <Route
+            path="/login"
+            element={
+              <PublicRoute>
+                <EmployeeLogin />
+              </PublicRoute>
+            }
+          />
 
-        <Route path="/join/:code" element={<JoinMeetingPage />} />
-        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-        <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
-        <Route path="/shared/:token" element={<SharedFilePage />} />
+          <Route
+            path="/adminLogin"
+            element={
+              <PublicRoute>
+                <AdminLoginPage />
+              </PublicRoute>
+            }
+          />
 
-        {/* EMPLOYEE PROTECTED */}
-        <Route
-          path="/"
-          element={
-            <ProtectedRoute>
-              <EmployeeDashboard />
-            </ProtectedRoute>
-          }
-        />
+          {/* CUSTOMER PUBLIC ROUTES */}
+          <Route
+            path="/customer/login"
+            element={
+              <PublicRoute>
+                <CustomerLogin />
+              </PublicRoute>
+            }
+          />
+          <Route
+            path="/customer/register"
+            element={
+              <PublicRoute>
+                <CustomerRegister />
+              </PublicRoute>
+            }
+          />
 
-        <Route
-          path="/dashboard"
-          element={
-            <ProtectedRoute>
-              <EmployeeDashboard />
-            </ProtectedRoute>
-          }
-        />
+          <Route path="/join/:code" element={<JoinMeetingPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
+          <Route path="/shared/:token" element={<SharedFilePage />} />
 
-        <Route
-          path="/profile"
-          element={
-            <ProtectedRoute>
-              <EmployeeProfilePage />
-            </ProtectedRoute>
-          }
-        />
+          {/* EMPLOYEE PROTECTED */}
+          <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <EmployeeDashboard />
+              </ProtectedRoute>
+            }
+          />
 
-        <Route
-          path="/change-password"
-          element={
-            <ProtectedRoute>
-              <ChangePasswordPage />
-            </ProtectedRoute>
-          }
-        />
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute>
+                <EmployeeDashboard />
+              </ProtectedRoute>
+            }
+          />
 
-        <Route
-          path="/documents/:id"
-          element={
-            <ProtectedRoute>
-              <DocumentEditor />
-            </ProtectedRoute>
-          }
-        />
+          <Route
+            path="/profile"
+            element={
+              <ProtectedRoute>
+                <EmployeeProfilePage />
+              </ProtectedRoute>
+            }
+          />
 
-        {/* ADMIN PROTECTED */}
-        <Route
-          path="/adminDashboard"
-          element={
-            <AdminProtectedRoute>
-              <AdminDashboard />
-            </AdminProtectedRoute>
-          }
-        />
+          <Route
+            path="/change-password"
+            element={
+              <ProtectedRoute>
+                <ChangePasswordPage />
+              </ProtectedRoute>
+            }
+          />
 
-        {/* CUSTOMER PROTECTED */}
-        <Route
-          path="/customer/dashboard"
-          element={
-            <CustomerProtectedRoute>
-              <CustomerDashboard />
-            </CustomerProtectedRoute>
-          }
-        />
-      </Routes>
+          <Route
+            path="/documents/:id"
+            element={
+              <ProtectedRoute>
+                <DocumentEditor />
+              </ProtectedRoute>
+            }
+          />
 
-      <Toaster position="top-right" richColors duration={3000} />
+          {/* ADMIN PROTECTED */}
+          <Route
+            path="/adminDashboard"
+            element={
+              <AdminProtectedRoute>
+                <AdminDashboard />
+              </AdminProtectedRoute>
+            }
+          />
+
+          {/* CUSTOMER PROTECTED */}
+          <Route
+            path="/customer/dashboard"
+            element={
+              <CustomerProtectedRoute>
+                <CustomerDashboard />
+              </CustomerProtectedRoute>
+            }
+          />
+        </Routes>
+
+        <Toaster position="top-right" richColors duration={3000} />
+      </NotificationContextProvider>
     </AuthContextProvider>
   );
 }

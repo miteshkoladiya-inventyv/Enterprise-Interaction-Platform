@@ -25,10 +25,20 @@ import {
   PhoneOff,
   PhoneMissed,
   PhoneIncoming,
+  Edit,
+  Star,
+  Pin,
+  AtSign,
+  Bell,
+  Info,
 } from "lucide-react";
 import axios from "axios";
 import { toast } from "sonner";
-import { useAuthContext } from "../context/AuthContextProvider";
+import { BACKEND_URL } from "@/config";
+import { useAuthContext } from "@/context/AuthContextProvider";
+import FileUploadModal from "./FileUploadModal";
+import MentionAutocomplete from "./MentionAutocomplete";
+import ReactionAnalyticsModal from "./ReactionAnalyticsModal";
 import CreateGroupModal from "./CreateGroupModal";
 import StartChatModal from "./StartChatModal";
 import ChannelSettingsModal from "./ChannelSettingsModal";
@@ -39,19 +49,16 @@ import GroupCallWaitingModal from "./GroupCallWaitingModal";
 import GroupCallActiveBar from "./GroupCallActiveBar";
 import GroupVideoCallBar from "./GroupVideoCallBar";
 import GroupCallIncomingBanner from "./GroupCallIncomingBanner";
-import { useAudioCall } from "../hooks/useAudioCall";
-import { useVideoCall } from "../hooks/useVideoCall";
-import { useGroupCall } from "../hooks/useGroupCall";
+import { useAudioCallLiveKit } from "../hooks/useAudioCallLiveKit";
+import { useVideoCallLiveKit } from "../hooks/useVideoCallLiveKit";
+import { useGroupCallLiveKit } from "../hooks/useGroupCallLiveKit";
 import { useCallContext } from "../context/CallContextProvider";
 import ActiveVideoCallBar from "./ActiveVideoCallBar";
 import IncomingVideoCallModal from "./IncomingVideoCallModal";
 import OutgoingVideoCallModal from "./OutgoingVideoCallModal";
 
-import { BACKEND_URL } from "@/config";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-
-import FileUploadModal from "./FileUploadModal";
 
 const ChatInterface = () => {
   const [searchQuery, setSearchQuery] = useState("");
@@ -102,11 +109,34 @@ const ChatInterface = () => {
   const [searchedMessages, setSearchedMessages] = useState([]);
   const [searchingMessages, setSearchingMessages] = useState(false);
   const [activeReactionPicker, setActiveReactionPicker] = useState(null);
+  const [editingMessageId, setEditingMessageId] = useState(null);
+  const [editingMessageContent, setEditingMessageContent] = useState("");
+  const [showEditModal, setShowEditModal] = useState(false);
   const callStartTimeRef = useRef(null);
   const prevAudioCallStateRef = useRef("idle");
   const prevAudioRemoteUserRef = useRef(null);
   const prevVideoCallStateRef = useRef("idle");
   const prevVideoRemoteUserRef = useRef(null);
+
+  // Phase 1: Starred Messages & Message Pinning
+  const [starredMessageIds, setStarredMessageIds] = useState(new Set());
+  const [pinnedMessages, setPinnedMessages] = useState([]);
+  const [showPinnedPanel, setShowPinnedPanel] = useState(false);
+
+  // Phase 2: @Mentions & Rich Text
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [showMentionSuggestions, setShowMentionSuggestions] = useState(false);
+  const [userMentions, setUserMentions] = useState([]);
+  const [richContentMode, setRichContentMode] = useState(false);
+  const [myMentions, setMyMentions] = useState([]);
+  const [unreadMentionCount, setUnreadMentionCount] = useState(0);
+
+  // Phase 3: Message Status Indicators & Reaction Analytics
+  const [messageStatus, setMessageStatus] = useState({});
+  const [reactionAnalytics, setReactionAnalytics] = useState(null);
+  const [selectedReactionAnalyticsMessage, setSelectedReactionAnalyticsMessage] = useState(null);
+  const [showReactionAnalyticsModal, setShowReactionAnalyticsModal] = useState(false);
+  const [statusTooltipMessage, setStatusTooltipMessage] = useState(null); // Show status tooltip for specific message
 
   const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
   const [selectedSearchIndex, setSelectedSearchIndex] = useState(0);
@@ -403,20 +433,36 @@ const ChatInterface = () => {
     [token]
   );
 
+  const getDirectLiveKitTokenApi = useCallback(
+    async (toUserId, callType = "audio") => {
+      const { data } = await axios.post(
+        `${BACKEND_URL}/call/livekit-token`,
+        { toUserId: String(toUserId), callType },
+        axiosConfig
+      );
+      return data;
+    },
+    [token]
+  );
+
   const callContext = useCallContext();
   const hasGlobalCall = Boolean(callContext?.audioCall && callContext?.videoCall);
 
-  const localAudioCall = useAudioCall(
+  const localAudioCall = useAudioCallLiveKit(
     socket,
     user?.id,
     currentUserName,
-    requestCallApi
+    requestCallApi,
+    getDirectLiveKitTokenApi,
+    !hasGlobalCall
   );
-  const localVideoCall = useVideoCall(
+  const localVideoCall = useVideoCallLiveKit(
     socket,
     user?.id,
     currentUserName,
-    requestVideoCallApi
+    requestVideoCallApi,
+    getDirectLiveKitTokenApi,
+    !hasGlobalCall
   );
 
   const audioCall = hasGlobalCall ? callContext.audioCall : localAudioCall;
@@ -470,19 +516,46 @@ const ChatInterface = () => {
     [token]
   );
 
-  const groupCall = useGroupCall(
+  const getGroupLiveKitTokenApi = useCallback(
+    async (channelId) => {
+      const { data } = await axios.post(
+        `${BACKEND_URL}/call/group/livekit-token`,
+        { channelId },
+        axiosConfig
+      );
+      return data;
+    },
+    [token]
+  );
+
+  const groupCall = useGroupCallLiveKit(
     socket,
     user?.id,
     currentUserName,
     startGroupCallApi,
     getGroupCallStatusApi,
     joinGroupCallApi,
-    leaveGroupCallApi
+    leaveGroupCallApi,
+    getGroupLiveKitTokenApi
   );
 
   // Keep ref in sync so socket handlers always see the latest selectedChat
   useEffect(() => {
     selectedChatRef.current = selectedChat;
+  }, [selectedChat]);
+
+  // Debug: Log selectedChat structure when changed to help troubleshoot @mentions
+  useEffect(() => {
+    if (selectedChat) {
+      console.log("📌 selectedChat updated:", {
+        _id: selectedChat._id,
+        name: selectedChat.name,
+        channel_type: selectedChat.channel_type,
+        members_count: selectedChat?.members?.length,
+        members_sample: selectedChat?.members?.slice(0, 2),
+        other_user: selectedChat?.other_user
+      });
+    }
   }, [selectedChat]);
 
   useEffect(() => {
@@ -676,7 +749,26 @@ const ChatInterface = () => {
   //   }
   // };
 
+  const clearUnreadCountForChannel = (channelId) => {
+    if (!channelId) return;
+
+    const applyUnreadReset = (chat) =>
+      String(chat._id) === String(channelId)
+        ? { ...chat, unread_count: 0 }
+        : chat;
+
+    setDirectChats((prev) => prev.map(applyUnreadReset));
+    setUserChannel((prev) => prev.map(applyUnreadReset));
+    setSelectedChat((prev) =>
+      prev && String(prev._id) === String(channelId)
+        ? { ...prev, unread_count: 0 }
+        : prev
+    );
+  };
+
   const markMessagesAsSeenInChannel = async (channelId) => {
+    clearUnreadCountForChannel(channelId);
+
     // Get unseen messages before making the API call
     const unseenMessages = messages.filter(
       (msg) =>
@@ -684,42 +776,39 @@ const ChatInterface = () => {
         !msg.seen_by?.some((s) => s.user_id._id === user?.id)
     );
 
-    if (unseenMessages.length === 0) {
-      return; // No messages to mark as seen
+    if (unseenMessages.length > 0) {
+      // Optimistically update visible messages while backend updates source-of-truth.
+      const currentUserSeenEntry = {
+        user_id: {
+          _id: user?.id,
+          first_name: user?.first_name || "You",
+          last_name: user?.last_name || "",
+          full_name: `${user?.first_name || "You"} ${
+            user?.last_name || ""
+          }`.trim(),
+          email: user?.email || "",
+        },
+        seen_at: new Date(),
+      };
+
+      setMessages((prev) =>
+        prev.map((msg) => {
+          const shouldMarkSeen =
+            msg.sender_id !== user?.id &&
+            !msg.seen_by?.some((s) => s.user_id._id === user?.id);
+
+          if (shouldMarkSeen) {
+            return {
+              ...msg,
+              seen_by: [...(msg.seen_by || []), currentUserSeenEntry],
+              seen_count: (msg.seen_count || 0) + 1,
+              is_seen: true,
+            };
+          }
+          return msg;
+        })
+      );
     }
-
-    // Optimistically update UI immediately
-    const currentUserSeenEntry = {
-      user_id: {
-        _id: user?.id,
-        first_name: user?.first_name || "You",
-        last_name: user?.last_name || "",
-        full_name: `${user?.first_name || "You"} ${
-          user?.last_name || ""
-        }`.trim(),
-        email: user?.email || "",
-      },
-      seen_at: new Date(),
-    };
-
-    setMessages((prev) =>
-      prev.map((msg) => {
-        // Check if this message should be marked as seen
-        const shouldMarkSeen =
-          msg.sender_id !== user?.id &&
-          !msg.seen_by?.some((s) => s.user_id._id === user?.id);
-
-        if (shouldMarkSeen) {
-          return {
-            ...msg,
-            seen_by: [...(msg.seen_by || []), currentUserSeenEntry],
-            seen_count: (msg.seen_count || 0) + 1,
-            is_seen: true,
-          };
-        }
-        return msg;
-      })
-    );
 
     // Now make the API call
     try {
@@ -728,7 +817,7 @@ const ChatInterface = () => {
         {},
         axiosConfig
       );
-      // Socket events handle chat list updates automatically
+      clearUnreadCountForChannel(channelId);
     } catch (error) {
       console.error("Error marking messages as seen:", error);
     }
@@ -814,7 +903,14 @@ const ChatInterface = () => {
   const selectChat = async (chat) => {
     setSelectedChat(chat);
     setReplyingTo(null);
-    if (chat?._id) await markMessagesAsSeenInChannel(chat._id);
+    if (chat?._id) {
+      clearUnreadCountForChannel(chat._id);
+      await markMessagesAsSeenInChannel(chat._id);
+      // Phase 1: Load pinned messages for this chat
+      if (chat.channel_type === "group") {
+        await loadPinnedMessages();
+      }
+    }
   };
 
   const leaveGroup = async (id) => {
@@ -836,7 +932,7 @@ const ChatInterface = () => {
   const handleDeleteMessage = async (messageId) => {
     try {
       await axios.delete(
-        `${BACKEND_URL}/direct_chat/messages/${messageId}`,
+        `${BACKEND_URL}/chat/messages/${messageId}`,
         axiosConfig
       );
       setMessages((prev) => prev.filter((m) => m._id !== messageId));
@@ -845,6 +941,46 @@ const ChatInterface = () => {
       await getUserChannel();
     } catch (error) {
       toast.error(error.response?.data?.error || "Failed to delete message");
+    }
+  };
+
+  const handleEditMessage = (message) => {
+    setEditingMessageId(message._id);
+    setEditingMessageContent(message.content);
+    setShowEditModal(true);
+  };
+
+  const saveEditedMessage = async () => {
+    if (!editingMessageContent.trim()) {
+      toast.error("Message content cannot be empty");
+      return;
+    }
+
+    try {
+      await axios.put(
+        `${BACKEND_URL}/chat/messages/${editingMessageId}`,
+        { content: editingMessageContent },
+        axiosConfig
+      );
+
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg._id === editingMessageId
+            ? {
+                ...msg,
+                content: editingMessageContent,
+                edited_at: new Date(),
+              }
+            : msg
+        )
+      );
+
+      setShowEditModal(false);
+      setEditingMessageId(null);
+      setEditingMessageContent("");
+      toast.success("Message edited successfully");
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Failed to edit message");
     }
   };
 
@@ -873,6 +1009,86 @@ const ChatInterface = () => {
       );
     } catch (error) {
       console.error("Failed to toggle reaction:", error);
+    }
+  };
+
+  // Phase 1: Star/Unstar message
+  const toggleStarMessage = async (messageId) => {
+    try {
+      // Optimistic update
+      setStarredMessageIds((prev) => {
+        const newSet = new Set(prev);
+        if (newSet.has(messageId)) {
+          newSet.delete(messageId);
+        } else {
+          newSet.add(messageId);
+        }
+        return newSet;
+      });
+
+      await axios.post(
+        `${BACKEND_URL}/chat/messages/${messageId}/star`,
+        {},
+        axiosConfig
+      );
+      toast.success("Message starred/unstarred");
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Failed to star message");
+      // Revert optimistic update on error
+      setStarredMessageIds((prev) => {
+        const newSet = new Set(prev);
+        if (newSet.has(messageId)) {
+          newSet.delete(messageId);
+        } else {
+          newSet.add(messageId);
+        }
+        return newSet;
+      });
+    }
+  };
+
+  // Phase 1: Pin message (admin/moderator only)
+  const handlePinMessage = async (messageId, pinReason = null) => {
+    try {
+      const response = await axios.post(
+        `${BACKEND_URL}/chat/channels/${selectedChat._id}/pin/${messageId}`,
+        { pin_reason: pinReason },
+        axiosConfig
+      );
+      toast.success("Message pinned successfully");
+      // Reload pinned messages
+      await loadPinnedMessages();
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Failed to pin message");
+    }
+  };
+
+  // Phase 1: Unpin message (admin/moderator only)
+  const handleUnpinMessage = async (messageId) => {
+    try {
+      await axios.delete(
+        `${BACKEND_URL}/chat/channels/${selectedChat._id}/pin/${messageId}`,
+        axiosConfig
+      );
+      toast.success("Message unpinned successfully");
+      // Reload pinned messages
+      await loadPinnedMessages();
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Failed to unpin message");
+    }
+  };
+
+  // Phase 1: Load pinned messages for a channel
+  const loadPinnedMessages = async () => {
+    if (!selectedChat?._id) return;
+    try {
+      const response = await axios.get(
+        `${BACKEND_URL}/chat/channels/${selectedChat._id}/pinned`,
+        axiosConfig
+      );
+      setPinnedMessages(response.data.data?.pinned_messages || []);
+    } catch (error) {
+      console.error("Failed to load pinned messages:", error);
     }
   };
 
@@ -922,6 +1138,62 @@ const ChatInterface = () => {
         error.response?.data?.error || "Failed to clear conversation"
       );
     }
+  };
+
+  const handleMentionInsert = useCallback((user) => {
+    // Handle both direct and nested user object structures
+    const firstName = user.first_name || user.user_id?.first_name || user.username || "User";
+    const mentionText = `@${firstName}`;
+    const beforeMention = newMessage.substring(0, newMessage.lastIndexOf("@"));
+    setNewMessage(beforeMention + mentionText + " ");
+    setMentionQuery("");
+    setShowMentionSuggestions(false);
+  }, [newMessage]);
+
+  // Track @mention queries in message input with debounce to prevent blinking
+  useEffect(() => {
+    const debounceTimer = setTimeout(() => {
+      const atIndex = newMessage.lastIndexOf("@");
+      if (atIndex !== -1) {
+        const afterAt = newMessage.substring(atIndex + 1);
+        // If there's no space after @, we're typing a mention (including just @ with nothing after)
+        if (!afterAt.includes(" ")) {
+          setMentionQuery(afterAt); // Can be empty string when just @ is typed
+          setShowMentionSuggestions(true);
+          console.log("✅ @mention detected! Query:", afterAt, "Should show:", showMentionSuggestions, "Members:", selectedChat?.members?.length || 0);
+        } else {
+          setShowMentionSuggestions(false);
+          setMentionQuery("");
+        }
+      } else {
+        setShowMentionSuggestions(false);
+        setMentionQuery("");
+      }
+    }, 100); // 100ms debounce prevents rapid state flips when typing/deleting spaces
+
+    return () => clearTimeout(debounceTimer);
+  }, [newMessage, selectedChat?.members]);
+
+  // Show message status tooltip on hover
+  const handleStatusHover = async (messageId) => {
+    // Fetch and show status for this message
+    try {
+      const response = await axios.get(
+        `${BACKEND_URL}/chat/messages/${messageId}/status`,
+        axiosConfig
+      );
+      setStatusTooltipMessage(messageId);
+      setMessageStatus((prev) => ({
+        ...prev,
+        [messageId]: response.data.data,
+      }));
+    } catch (error) {
+      console.error("Error loading message status:", error);
+    }
+  };
+
+  const handleStatusLeave = () => {
+    setStatusTooltipMessage(null);
   };
 
   const sendMessage = async (e) => {
@@ -1371,6 +1643,99 @@ const ChatInterface = () => {
     };
     socket.on("message_reaction", handleReaction);
 
+    // Phase 1: Starred Messages handler
+    const handleMessageStarred = (data) => {
+      const { message_id, is_starred, starred_count } = data;
+      setStarredMessageIds((prev) => {
+        const newSet = new Set(prev);
+        if (is_starred) {
+          newSet.add(message_id);
+        } else {
+          newSet.delete(message_id);
+        }
+        return newSet;
+      });
+    };
+    socket.on("message:starred", handleMessageStarred);
+
+    //Phase 1: Pinned Messages handlers
+    const handleMessagePinned = (data) => {
+      // Reload pinned messages when a message is pinned
+      loadPinnedMessages();
+    };
+    socket.on("message:pinned", handleMessagePinned);
+
+    const handleMessageUnpinned = (data) => {
+      // Reload pinned messages when a message is unpinned
+      loadPinnedMessages();
+    };
+    socket.on("message:unpinned", handleMessageUnpinned);
+
+    // Phase 2: Mention handlers
+    const handleMessageMentioned = (data) => {
+      const { mentioned_user_id, sender_name, content } = data;
+      // Only notify if current user was mentioned
+      if (mentioned_user_id === user?.id) {
+        toast.info(`${sender_name} mentioned you: ${content.substring(0, 50)}...`);
+        setUnreadMentionCount((prev) => prev + 1);
+      }
+    };
+    socket.on("message:mentioned", handleMessageMentioned);
+
+    // Phase 3: Message Status Indicators & Reaction Analytics handlers
+    const handleMessageDelivered = (data) => {
+      setMessageStatus((prev) => ({
+        ...prev,
+        [data.message_id]: {
+          ...(prev[data.message_id] || {}),
+          delivered_count: data.delivered_count,
+        },
+      }));
+    };
+    socket.on("message:delivered", handleMessageDelivered);
+
+    const handleReactionAdded = (data) => {
+      // Update local message reaction
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg._id === data.message_id
+            ? {
+                ...msg,
+                reactions: [
+                  ...(msg.reactions || []),
+                  {
+                    emoji: data.emoji,
+                    user_id: data.user_id,
+                    reacted_at: data.reacted_at,
+                  },
+                ],
+              }
+            : msg
+        )
+      );
+    };
+    socket.on("message:reaction-added", handleReactionAdded);
+
+    const handleReactionRemoved = (data) => {
+      // Update local message reaction
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg._id === data.message_id
+            ? {
+                ...msg,
+                reactions: (msg.reactions || []).filter(
+                  (r) =>
+                    !(r.emoji === data.emoji && r.user_id === data.user_id)
+                ),
+              }
+            : msg
+        )
+      );
+    };
+    socket.on("message:reaction-removed", handleReactionRemoved);
+
+    // Phase 4: Message Scheduling handlers removed
+
     socket.emit("request-online-users");
 
     // Periodically refresh online status for reliability
@@ -1388,6 +1753,13 @@ const ChatInterface = () => {
       socket.off("message_deleted", handleMessageDeleted);
       socket.off("conversation_cleared", handleConversationCleared);
       socket.off("message_reaction", handleReaction);
+      socket.off("message:starred", handleMessageStarred);
+      socket.off("message:pinned", handleMessagePinned);
+      socket.off("message:unpinned", handleMessageUnpinned);
+      socket.off("message:mentioned", handleMessageMentioned);
+      socket.off("message:delivered", handleMessageDelivered);
+      socket.off("message:reaction-added", handleReactionAdded);
+      socket.off("message:reaction-removed", handleReactionRemoved);
       clearInterval(onlineInterval);
     };
   }, [socket]);
@@ -1533,7 +1905,7 @@ const ChatInterface = () => {
 
           {/* Search */}
           <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
+            <Search className="absolute left-2.5 inset-y-0 my-auto w-3.5 h-3.5 text-zinc-500" />
             <Input
               type="text"
               value={chatSearchQuery}
@@ -2021,7 +2393,7 @@ const ChatInterface = () => {
             <div className="px-4 py-2 bg-zinc-900/80 border-b border-zinc-800/60">
               <div className="flex items-center gap-2">
                 <div className="relative flex-1">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
+                  <Search className="absolute left-2.5 inset-y-0 my-auto w-3.5 h-3.5 text-zinc-500" />
                   <Input
                     type="text"
                     value={messageSearchQuery}
@@ -2185,6 +2557,58 @@ const ChatInterface = () => {
               </div>
             ) : (
               <>
+                {/* Phase 1: Pinned Messages Panel */}
+                {pinnedMessages.length > 0 && (
+                  <div className="mb-4 bg-blue-500/10 border border-blue-500/40 rounded-lg p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <Pin className="w-4 h-4 text-blue-400" />
+                        <span className="text-sm font-semibold text-blue-300">
+                          {pinnedMessages.length} Pinned Message{pinnedMessages.length !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setShowPinnedPanel(!showPinnedPanel)}
+                        className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                      >
+                        {showPinnedPanel ? 'Hide' : 'Show'}
+                      </button>
+                    </div>
+                    {showPinnedPanel && (
+                      <div className="space-y-2 mt-2 max-h-48 overflow-y-auto">
+                        {pinnedMessages.map((pinnedMsg) => (
+                          <div
+                            key={pinnedMsg._id}
+                            className="bg-zinc-800/50 border border-zinc-700/60 rounded p-2 text-xs"
+                          >
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="font-medium text-zinc-300">
+                                {pinnedMsg.sender?.first_name} {pinnedMsg.sender?.last_name}
+                              </span>
+                              {pinnedMsg.pin_reason && (
+                                <span className="text-zinc-500">Pin reason: {pinnedMsg.pin_reason}</span>
+                              )}
+                            </div>
+                            <p className="text-zinc-400 break-words line-clamp-2">{pinnedMsg.content}</p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <button
+                                onClick={() => {
+                                  // Scroll to the message
+                                  const messageEl = document.getElementById(`message-${pinnedMsg._id}`);
+                                  messageEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                }}
+                                className="text-blue-300 hover:text-blue-200 text-xs"
+                              >
+                                View
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {messages.map((message, index) => {
                   const parentMessage = message.parent_message_id
                     ? getParentMessage(message.parent_message_id)
@@ -2244,6 +2668,7 @@ const ChatInterface = () => {
                       </div>
                     ) : (
                     <div
+                      id={`message-${message._id}`}
                       ref={(el) => {
                         if (isSearchResult) {
                           searchedMessageRefs.current[message._id] = el;
@@ -2335,6 +2760,62 @@ const ChatInterface = () => {
                               ))}
                           </div>
                         </div>
+
+                        {/* Phase 3: Message Status Tooltip - Show on hover above info icon */}
+                        {message.is_own && statusTooltipMessage === message._id && messageStatus[message._id] && (
+                          <div className="absolute bottom-full right-0 mb-2 bg-zinc-800 border border-zinc-700 rounded-lg p-3 text-xs min-w-max z-50 shadow-lg">
+                            {/* Delivered Status */}
+                            <div className="mb-2 pb-2 border-b border-zinc-700">
+                              <p className="font-semibold text-zinc-300 mb-1 flex items-center">
+                                <Check className="w-3 h-3 mr-2" />
+                                Delivered ({messageStatus[message._id].delivered_count || 0})
+                              </p>
+                              {messageStatus[message._id].delivered_to && messageStatus[message._id].delivered_to.length > 0 ? (
+                                <div className="space-y-1 text-zinc-400">
+                                  {messageStatus[message._id].delivered_to.map((user) => (
+                                    <div key={user.user_id} className="flex justify-between items-center gap-2">
+                                      <span>{user.name}</span>
+                                      <span className="text-xs opacity-75">
+                                        {new Date(user.delivered_at).toLocaleTimeString([], {
+                                          hour: "2-digit",
+                                          minute: "2-digit",
+                                        })}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="text-zinc-500 italic">No one has received this yet</p>
+                              )}
+                            </div>
+
+                            {/* Read Status */}
+                            <div>
+                              <p className="font-semibold text-zinc-300 mb-1 flex items-center">
+                                <CheckCheck className="w-3 h-3 mr-2" />
+                                Read ({messageStatus[message._id].read_count || 0})
+                              </p>
+                              {messageStatus[message._id].read_by && messageStatus[message._id].read_by.length > 0 ? (
+                                <div className="space-y-1 text-zinc-400">
+                                  {messageStatus[message._id].read_by.map((user) => (
+                                    <div key={user.user_id} className="flex justify-between items-center gap-2">
+                                      <span>{user.name}</span>
+                                      <span className="text-xs opacity-75">
+                                        {new Date(user.read_at).toLocaleTimeString([], {
+                                          hour: "2-digit",
+                                          minute: "2-digit",
+                                        })}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="text-zinc-500 italic">No one has read this yet</p>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
                         {/* Message actions on hover */}
                         <div className={`absolute ${message.is_own ? "left-0 -translate-x-full pr-1" : "right-0 translate-x-full pl-1"} top-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5`}>
                           <button
@@ -2351,14 +2832,75 @@ const ChatInterface = () => {
                           >
                             <Reply className="w-3.5 h-3.5" />
                           </button>
+                          {/* Star button - available to all */}
+                          <button
+                            onClick={() => toggleStarMessage(message._id)}
+                            className={`p-1 hover:bg-yellow-500/10 rounded transition-colors ${starredMessageIds.has(message._id) ? "text-yellow-400" : "text-zinc-500 hover:text-yellow-400"}`}
+                            title={starredMessageIds.has(message._id) ? "Unstar message" : "Star message"}
+                          >
+                            <Star className="w-3.5 h-3.5" fill={starredMessageIds.has(message._id) ? "currentColor" : "none"} />
+                          </button>
+
+                          {/* Pin button - for group chats (admin/moderator check on backend) */}
+                          {selectedChat?.channel_type === "group" && (
+                            <button
+                              onClick={() => {
+                                if (message.is_pinned) {
+                                  handleUnpinMessage(message._id);
+                                } else {
+                                  handlePinMessage(message._id);
+                                }
+                              }}
+                              className={`p-1 hover:bg-purple-500/10 rounded transition-colors ${message.is_pinned ? "text-purple-400" : "text-zinc-500 hover:text-purple-400"}`}
+                              title={message.is_pinned ? "Unpin message" : "Pin message (admin only)"}
+                            >
+                              <Pin className="w-3.5 h-3.5" fill={message.is_pinned ? "currentColor" : "none"} />
+                            </button>
+                          )}
+
+                          {/* Phase 3: Reaction Analytics button */}
+                          {message.reactions && Object.keys(message.reactions).length > 0 && (
+                            <button
+                              onClick={() => {
+                                setSelectedReactionAnalyticsMessage(message._id);
+                                setShowReactionAnalyticsModal(true);
+                              }}
+                              className="p-1 hover:bg-indigo-500/10 rounded text-zinc-500 hover:text-indigo-400 transition-colors"
+                              title="View reaction analytics"
+                            >
+                              <Sparkles className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+
+                          {/* Info button to view message status on hover */}
                           {message.is_own && (
                             <button
-                              onClick={() => handleDeleteMessage(message._id)}
-                              className="p-1 hover:bg-red-500/10 rounded text-zinc-500 hover:text-red-400 transition-colors"
-                              title="Delete"
+                              onMouseEnter={() => handleStatusHover(message._id)}
+                              onMouseLeave={handleStatusLeave}
+                              className="p-1 rounded transition-colors text-zinc-500 hover:text-blue-400 hover:bg-blue-500/10"
+                              title="Hover to view message status"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
+                              <Info className="w-3.5 h-3.5" />
                             </button>
+                          )}
+
+                          {message.is_own && (
+                            <>
+                              <button
+                                onClick={() => handleEditMessage(message)}
+                                className="p-1 hover:bg-blue-500/10 rounded text-zinc-500 hover:text-blue-400 transition-colors"
+                                title="Edit"
+                              >
+                                <Edit className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteMessage(message._id)}
+                                className="p-1 hover:bg-red-500/10 rounded text-zinc-500 hover:text-red-400 transition-colors"
+                                title="Delete"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </>
                           )}
                         </div>
                         {/* Reaction picker popup */}
@@ -2381,15 +2923,22 @@ const ChatInterface = () => {
                             {Object.entries(message.reactions).map(([emoji, userIds]) => (
                               <button
                                 key={emoji}
+                                onContextMenu={(e) => {
+                                  e.preventDefault();
+                                  // Right-click to view analytics
+                                  setSelectedReactionAnalyticsMessage(message._id);
+                                  setShowReactionAnalyticsModal(true);
+                                }}
                                 onClick={() => toggleReaction(message._id, emoji)}
-                                className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-xs border transition-colors ${
+                                className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-xs border transition-colors cursor-pointer ${
                                   userIds.includes(user?.id)
-                                    ? "bg-indigo-500/20 border-indigo-500/40 text-indigo-300"
-                                    : "bg-zinc-800/80 border-zinc-700/40 text-zinc-400 hover:border-zinc-600"
+                                    ? "bg-indigo-500/20 border-indigo-500/40 text-indigo-300 hover:bg-indigo-500/30"
+                                    : "bg-zinc-800/80 border-zinc-700/40 text-zinc-400 hover:border-zinc-600 hover:bg-zinc-700/80"
                                 }`}
+                                title="Click to toggle reaction | Right-click for analytics"
                               >
                                 <span>{emoji}</span>
-                                <span className="text-[10px]">{userIds.length}</span>
+                                <span className="text-[10px] opacity-75">{userIds.length}</span>
                               </button>
                             ))}
                           </div>
@@ -2437,55 +2986,80 @@ const ChatInterface = () => {
             selectedChat?._id &&
             String(selectedChat._id) === String(removedFromChannelId)
           ) && (
-            <div className="px-4 pt-3 pb-1 border-t border-zinc-800/60 bg-zinc-950">
+            <div className="border-t border-zinc-800/60 bg-zinc-950 px-4 py-3">
               {!socketConnected && (
-                <div className="mb-2 flex items-center gap-2 text-amber-400 text-xs bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-1.5">
+                <div className="mb-3 flex items-center gap-2 text-amber-400 text-xs bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-1.5">
                   <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
                   Connecting to chat...
                 </div>
               )}
-              <form onSubmit={sendMessage} className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
-                  onClick={() => setShowFileUpload(true)}
-                  disabled={!socketConnected}
-                  title="Send file"
-                >
-                  <Paperclip className="w-4 h-4" />
-                </Button>
 
-                <Input
-                  type="text"
-                  value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
-                  placeholder={
-                    !socketConnected
-                      ? "Connecting..."
-                      : replyingTo
-                      ? "Type your reply..."
-                      : "Type a message..."
-                  }
-                  disabled={sendingMessage || !socketConnected}
-                  className="flex-1 bg-zinc-900/80 border-zinc-800 placeholder:text-zinc-600 focus:border-indigo-500/50"
-                />
-                <Button
-                  type="submit"
-                  size="icon"
-                  disabled={
-                    !newMessage.trim() || sendingMessage || !socketConnected
-                  }
-                  className="bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-40"
-                >
+              {/* Message Input Form - Restructured for proper mention dropdown */}
+              <div className="relative">
+                {/* Mention autocomplete - Show group members when @ is typed */}
+                {showMentionSuggestions && (
+                  <MentionAutocomplete
+                    query={mentionQuery}
+                    onSelect={handleMentionInsert}
+                    isOpen={showMentionSuggestions}
+                    groupMembers={
+                      selectedChat?.channel_type === "group"
+                        ? selectedChat?.members || []
+                        : selectedChat?.other_user
+                        ? [selectedChat.other_user, user]
+                        : []
+                    }
+                    maxResults={12}
+                  />
+                )}
+
+                <form onSubmit={sendMessage} className="flex items-center gap-2">
+                  {/* Attach Button */}
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="h-10 w-10 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 flex-shrink-0"
+                    onClick={() => setShowFileUpload(true)}
+                    disabled={!socketConnected}
+                    title="Attach file"
+                  >
+                    <Paperclip className="w-5 h-5" />
+                  </Button>
+
+                  {/* Text Input */}
+                  <Input
+                    type="text"
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    placeholder={
+                      !socketConnected
+                        ? "Connecting..."
+                        : replyingTo
+                        ? "Type your reply...(@ Mention)"
+                        : "Type a message...(@ Mention)"
+                    }
+                    disabled={!socketConnected}
+                    className="flex-1 h-10 bg-zinc-900/50 border border-zinc-800 hover:border-zinc-700 focus:border-indigo-500/50 placeholder:text-zinc-600 focus:ring-1 focus:ring-indigo-500/20"
+                  />
+
+                  {/* Send Button */}
+                  <Button
+                    type="submit"
+                    size="icon"
+                    disabled={
+                      !newMessage.trim() || sendingMessage || !socketConnected
+                    }
+                    className="h-10 w-10 bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-40 flex-shrink-0"
+                  >
                   {sendingMessage ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <Loader2 className="w-5 h-5 animate-spin" />
                   ) : (
-                    <Send className="w-4 h-4" />
+                    <Send className="w-5 h-5" />
                   )}
                 </Button>
               </form>
+              </div>
             </div>
           )}
         </div>
@@ -2792,7 +3366,74 @@ const ChatInterface = () => {
           </div>
         </div>
       )}
-      
+
+      {/* Edit Message Modal */}
+      {showEditModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-zinc-900 rounded-xl border border-zinc-800/80 shadow-xl max-w-md w-full flex flex-col">
+            {/* Header */}
+            <div className="px-4 py-3 border-b border-zinc-800/60 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Edit className="w-4 h-4 text-blue-400" />
+                <h3 className="text-sm font-semibold text-zinc-100">Edit Message</h3>
+              </div>
+              <button
+                onClick={() => {
+                  setShowEditModal(false);
+                  setEditingMessageId(null);
+                  setEditingMessageContent("");
+                }}
+                className="p-1 hover:bg-zinc-800 rounded transition"
+              >
+                <X className="w-4 h-4 text-zinc-400" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-4 space-y-3">
+              <textarea
+                value={editingMessageContent}
+                onChange={(e) => setEditingMessageContent(e.target.value)}
+                className="w-full p-3 bg-zinc-800 border border-zinc-700/60 rounded-lg text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"
+                placeholder="Edit your message..."
+                rows={4}
+              />
+            </div>
+
+            {/* Footer */}
+            <div className="px-4 pb-4 flex gap-2">
+              <button
+                onClick={() => {
+                  setShowEditModal(false);
+                  setEditingMessageId(null);
+                  setEditingMessageContent("");
+                }}
+                className="flex-1 py-2 bg-zinc-800 text-zinc-200 text-sm font-medium rounded-lg hover:bg-zinc-700 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveEditedMessage}
+                className="flex-1 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-500 transition-colors"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Phase 3: Reaction Analytics Modal */}
+      <ReactionAnalyticsModal
+        messageId={selectedReactionAnalyticsMessage}
+        channelId={selectedChat?._id}
+        isOpen={showReactionAnalyticsModal}
+        onClose={() => {
+          setShowReactionAnalyticsModal(false);
+          setSelectedReactionAnalyticsMessage(null);
+        }}
+      />
+
     </div>
   );
 };

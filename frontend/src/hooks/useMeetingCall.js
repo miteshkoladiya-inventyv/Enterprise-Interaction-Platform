@@ -1,25 +1,34 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { Room, RoomEvent, Track } from "livekit-client";
+import { BACKEND_URL } from "../config";
 import { requestMediaPermissions, PermissionDeniedError } from "./useMediaPermissions";
 
-const ICE_SERVERS = {
-  iceServers: [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
-  ],
-};
+function getAuthHeaders() {
+  const token = typeof localStorage !== "undefined" ? localStorage.getItem("token") : null;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function chooseRecorderMimeType() {
+  const candidates = [
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus",
+    "video/webm",
+  ];
+
+  for (const type of candidates) {
+    if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(type)) {
+      return type;
+    }
+  }
+
+  return "video/webm";
+}
 
 /**
- * Meeting video call hook. Mesh WebRTC: host creates offers to all others so that
- * joiners reliably receive the host's video; joiners only respond to offers.
- * Uses meeting-join/meeting-leave for room membership, meeting-webrtc-* for signaling.
- *
- * Features:
- *  - Camera & microphone toggle
- *  - Screen sharing (replaces video track on peers, reverts on stop)
- *  - Media-state broadcast (mute / video-off indicators for remote users)
- *  - Hand raise broadcast
+ * LiveKit SFU-based meeting media hook.
+ * Keeps the same public API used by MeetingModule.
  */
-export function useMeetingCall(socket, currentUserId, currentUserName, meetingId, roomParticipants, isHost = false) {
+export function useMeetingCall(socket, currentUserId, currentUserName, meetingId) {
   const [localStream, setLocalStream] = useState(null);
   const [remoteStreams, setRemoteStreams] = useState({});
   const [remoteScreenStreams, setRemoteScreenStreams] = useState({});
@@ -29,790 +38,742 @@ export function useMeetingCall(socket, currentUserId, currentUserName, meetingId
   const [screenShareUserId, setScreenShareUserId] = useState(null);
   const [mediaError, setMediaError] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
-  // Remote media states { [userId]: { isMuted, isVideoOff, handRaised } }
+  const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
+  const [remoteRecordingState, setRemoteRecordingState] = useState({
+    isRecording: false,
+    startedAt: null,
+    startedByName: null,
+    startedByUserId: null,
+    updatedAt: null,
+  });
   const [remoteMediaStates, setRemoteMediaStates] = useState({});
-
-  const localStreamRef = useRef(null);
-  const screenStreamRef = useRef(null);
-  const originalVideoTrackRef = useRef(null);
-  const peerConnectionsRef = useRef({});
-  const iceCandidateBufferRef = useRef({});
-  const remoteStreamsRef = useRef({});
-  const remoteScreenStreamsRef = useRef({});
-  const socketRef = useRef(socket);
-  const meetingIdRef = useRef(meetingId);
+  const [handRaised, setHandRaised] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
 
   const currentUserIdStr = currentUserId != null ? String(currentUserId) : null;
 
-  useEffect(() => { socketRef.current = socket; }, [socket]);
-  useEffect(() => { meetingIdRef.current = meetingId; }, [meetingId]);
+  const roomRef = useRef(null);
+  const connectedMeetingIdRef = useRef(null);
+  const localStreamRef = useRef(null);
+  const remoteStreamsRef = useRef({});
+  const remoteScreenStreamsRef = useRef({});
 
-  const drainIceCandidates = useCallback(async (remoteIdStr) => {
-    const pc = peerConnectionsRef.current[remoteIdStr];
-    const buffer = iceCandidateBufferRef.current[remoteIdStr];
-    if (!pc || !buffer?.length) return;
-    delete iceCandidateBufferRef.current[remoteIdStr];
-    for (const c of buffer) {
-      try {
-        await pc.addIceCandidate(new RTCIceCandidate(c));
-      } catch (err) {
-        console.warn("[MEETING_CALL] addIceCandidate (drain) error:", err);
+  const mediaRecorderRef = useRef(null);
+  const recordingChunksRef = useRef([]);
+  const recordingStartedAtRef = useRef(null);
+  const stopRecordingResolveRef = useRef(null);
+  const recordingRenderRef = useRef({
+    rafId: null,
+    canvas: null,
+    canvasCtx: null,
+    videoEls: new Map(),
+    audioContext: null,
+    audioDestination: null,
+    audioSources: new Map(),
+  });
+  const reconnectAttemptRef = useRef(0);
+
+  const syncStreamState = useCallback(() => {
+    const nextCam = {};
+    const nextScreen = {};
+
+    Object.entries(remoteStreamsRef.current).forEach(([key, stream]) => {
+      if (stream.getTracks().length > 0) {
+        nextCam[key] = new MediaStream(stream.getTracks());
       }
-    }
-  }, []);
-
-  // ---- Shared peer-connection factory (single source of truth) ----
-  const getOrCreatePeerConnection = useCallback((remoteIdStr) => {
-    if (peerConnectionsRef.current[remoteIdStr]) {
-      return peerConnectionsRef.current[remoteIdStr];
-    }
-
-    const pc = new RTCPeerConnection(ICE_SERVERS);
-    peerConnectionsRef.current[remoteIdStr] = pc;
-
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) =>
-        pc.addTrack(track, localStreamRef.current)
-      );
-    }
-
-    if (!remoteStreamsRef.current[remoteIdStr]) {
-      remoteStreamsRef.current[remoteIdStr] = new MediaStream();
-    }
-    if (!remoteScreenStreamsRef.current[remoteIdStr]) {
-      remoteScreenStreamsRef.current[remoteIdStr] = new MediaStream();
-    }
-
-    pc.ontrack = (e) => {
-      if (!e.track) return;
-      // Screen: explicit displaySurface (sender) or second video track from this peer (receiver fallback)
-      const isVideo = e.track.kind === "video";
-      const explicitScreen =
-        isVideo &&
-        (e.track.getSettings?.().displaySurface === "monitor" ||
-          e.track.getSettings?.().displaySurface === "window" ||
-          e.track.getSettings?.().displaySurface === "browser");
-      const cameraStream = remoteStreamsRef.current[remoteIdStr];
-      const alreadyHasVideo = cameraStream && cameraStream.getVideoTracks().length > 0;
-      const isScreen =
-        explicitScreen || (isVideo && alreadyHasVideo);
-      const streamRef = isScreen ? remoteScreenStreamsRef : remoteStreamsRef;
-      const setState = isScreen ? setRemoteScreenStreams : setRemoteStreams;
-      const stream = streamRef.current[remoteIdStr];
-      if (stream) {
-        stream.addTrack(e.track);
-        if (stream.getTracks().length === 1) {
-          setState((prev) => ({ ...prev, [remoteIdStr]: stream }));
-        } else if (isScreen) {
-          setState((prev) => ({ ...prev, [remoteIdStr]: stream }));
-        }
-      }
-    };
-
-    pc.onicecandidate = (e) => {
-      if (e.candidate && socketRef.current?.connected) {
-        socketRef.current.emit("meeting-webrtc-ice", {
-          meetingId: meetingIdRef.current,
-          toUserId: remoteIdStr,
-          candidate: e.candidate,
-        });
-      }
-    };
-
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
-        try { pc.close(); } catch (_) {}
-        delete peerConnectionsRef.current[remoteIdStr];
-        delete remoteStreamsRef.current[remoteIdStr];
-        delete remoteScreenStreamsRef.current[remoteIdStr];
-        delete iceCandidateBufferRef.current[remoteIdStr];
-        setRemoteStreams((prev) => {
-          const next = { ...prev };
-          delete next[remoteIdStr];
-          return next;
-        });
-        setRemoteScreenStreams((prev) => {
-          const next = { ...prev };
-          delete next[remoteIdStr];
-          return next;
-        });
-      }
-    };
-
-    return pc;
-  }, []);
-
-  // ---- Cleanup ----
-  const cleanup = useCallback(() => {
-    Object.values(peerConnectionsRef.current).forEach((pc) => {
-      try { pc.close(); } catch (_) {}
     });
-    peerConnectionsRef.current = {};
-    iceCandidateBufferRef.current = {};
+
+    Object.entries(remoteScreenStreamsRef.current).forEach(([key, stream]) => {
+      if (stream.getTracks().length > 0) {
+        nextScreen[key] = new MediaStream(stream.getTracks());
+      }
+    });
+
+    setRemoteStreams(nextCam);
+    setRemoteScreenStreams(nextScreen);
+  }, []);
+
+  const removeParticipantStreams = useCallback((identity) => {
+    const id = String(identity);
+    delete remoteStreamsRef.current[id];
+    delete remoteScreenStreamsRef.current[id];
+
+    setRemoteStreams((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+
+    setRemoteScreenStreams((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+
+    setRemoteMediaStates((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+
+    if (screenShareUserId === id) {
+      setScreenShareUserId(null);
+    }
+  }, [screenShareUserId]);
+
+  const attachTrack = useCallback((participantIdentity, track, source) => {
+    const id = String(participantIdentity);
+    const isScreen = source === Track.Source.ScreenShare || source === Track.Source.ScreenShareAudio;
+    const targetRef = isScreen ? remoteScreenStreamsRef : remoteStreamsRef;
+
+    if (!targetRef.current[id]) {
+      targetRef.current[id] = new MediaStream();
+    }
+
+    const stream = targetRef.current[id];
+    const existing = stream.getTracks().find((t) => t.id === track.mediaStreamTrack.id);
+    if (!existing) {
+      stream.addTrack(track.mediaStreamTrack);
+    }
+
+    if (isScreen && source === Track.Source.ScreenShare) {
+      setScreenShareUserId(id);
+    }
+
+    syncStreamState();
+  }, [syncStreamState]);
+
+  const detachTrack = useCallback((participantIdentity, track, source) => {
+    const id = String(participantIdentity);
+    const isScreen = source === Track.Source.ScreenShare || source === Track.Source.ScreenShareAudio;
+    const targetRef = isScreen ? remoteScreenStreamsRef : remoteStreamsRef;
+    const stream = targetRef.current[id];
+
+    if (!stream) return;
+
+    stream.getTracks().forEach((t) => {
+      if (t.id === track.mediaStreamTrack.id) {
+        stream.removeTrack(t);
+      }
+    });
+
+    if (stream.getTracks().length === 0) {
+      delete targetRef.current[id];
+      if (isScreen && source === Track.Source.ScreenShare && screenShareUserId === id) {
+        setScreenShareUserId(null);
+      }
+    }
+
+    syncStreamState();
+  }, [screenShareUserId, syncStreamState]);
+
+  const disconnectRoom = useCallback(() => {
+    if (!roomRef.current) return;
+
+    roomRef.current.removeAllListeners();
+    roomRef.current.disconnect();
+    roomRef.current = null;
+    connectedMeetingIdRef.current = null;
+
     remoteStreamsRef.current = {};
     remoteScreenStreamsRef.current = {};
+    setRemoteStreams({});
     setRemoteScreenStreams({});
-    if (screenStreamRef.current) {
-      screenStreamRef.current.getTracks().forEach((t) => t.stop());
-      screenStreamRef.current = null;
+    setScreenShareUserId(null);
+    setIsReconnecting(false);
+  }, []);
+
+  const rebuildRemoteStateFromRoom = useCallback((room) => {
+    if (!room) return;
+
+    remoteStreamsRef.current = {};
+    remoteScreenStreamsRef.current = {};
+
+    room.remoteParticipants.forEach((participant) => {
+      participant.trackPublications.forEach((pub) => {
+        if (!pub.isSubscribed || !pub.track) return;
+
+        const isScreen = pub.source === Track.Source.ScreenShare || pub.source === Track.Source.ScreenShareAudio;
+        const targetRef = isScreen ? remoteScreenStreamsRef : remoteStreamsRef;
+        const id = String(participant.identity);
+
+        if (!targetRef.current[id]) {
+          targetRef.current[id] = new MediaStream();
+        }
+
+        const stream = targetRef.current[id];
+        const exists = stream.getTracks().find((t) => t.id === pub.track.mediaStreamTrack.id);
+        if (!exists) {
+          stream.addTrack(pub.track.mediaStreamTrack);
+        }
+      });
+    });
+
+    const activeScreenOwner = Object.keys(remoteScreenStreamsRef.current)[0] || null;
+    if (activeScreenOwner) {
+      setScreenShareUserId(activeScreenOwner);
     }
-    originalVideoTrackRef.current = null;
+
+    syncStreamState();
+  }, [syncStreamState]);
+
+  const connectRoom = useCallback(async () => {
+    console.log("[LIVEKIT] connectRoom called with meetingId:", meetingId, "currentUserIdStr:", currentUserIdStr, "hasLocalStream:", !!localStreamRef.current);
+
+    if (!meetingId || !currentUserIdStr || !localStreamRef.current) {
+      console.log("[LIVEKIT] Early return - missing prerequisites");
+      return;
+    }
+
+    if (roomRef.current && connectedMeetingIdRef.current === String(meetingId)) {
+      console.log("[LIVEKIT] Already connected to this meeting, skipping");
+      return;
+    }
+
+    if (roomRef.current && connectedMeetingIdRef.current !== String(meetingId)) {
+      console.log("[LIVEKIT] Disconnecting from previous meeting");
+      disconnectRoom();
+    }
+
+    try {
+      console.log("[LIVEKIT] Requesting LiveKit token for meeting:", meetingId);
+      const response = await fetch(`${BACKEND_URL}/meetings/${meetingId}/livekit-token`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({}),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to get LiveKit meeting token");
+      }
+
+      const payload = await response.json();
+      console.log("[LIVEKIT] Got token response:", payload);
+
+      // Extract token data from response wrapper
+      const tokenData = payload.data || payload;
+      console.log("[LIVEKIT] Token data:", tokenData);
+
+      if (!tokenData.url || !tokenData.token) {
+        throw new Error(`Invalid token response: missing url (${!!tokenData.url}) or token (${!!tokenData.token})`);
+      }
+
+      console.log("[LIVEKIT] Got token, creating room");
+      const room = new Room({ adaptiveStream: true, dynacast: true });
+
+      room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+        console.log("[LIVEKIT] Participant disconnected:", participant.identity);
+        removeParticipantStreams(participant.identity);
+      });
+
+      room.on(RoomEvent.ParticipantConnected, () => {
+        console.log("[LIVEKIT] Participant connected");
+        rebuildRemoteStateFromRoom(room);
+      });
+
+      room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+        console.log("[LIVEKIT] Track subscribed:", track.kind, "from:", participant.identity);
+        attachTrack(participant.identity, track, publication?.source || track.source);
+      });
+
+      room.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
+        console.log("[LIVEKIT] Track unsubscribed:", track.kind, "from:", participant.identity);
+        detachTrack(participant.identity, track, publication?.source || track.source);
+      });
+
+      room.on(RoomEvent.LocalTrackPublished, (publication) => {
+        console.log("[LIVEKIT] Local track published:", publication.source);
+        if (publication.source === Track.Source.ScreenShare) {
+          console.log("[LIVEKIT] Screen share track published!");
+          setIsScreenSharing(true);
+          setScreenShareUserId(currentUserIdStr);
+        }
+      });
+
+      room.on(RoomEvent.LocalTrackUnpublished, (publication) => {
+        console.log("[LIVEKIT] Local track unpublished:", publication.source);
+        if (publication.source === Track.Source.ScreenShare) {
+          console.log("[LIVEKIT] Screen share track unpublished");
+          setIsScreenSharing(false);
+          if (screenShareUserId === currentUserIdStr) {
+            setScreenShareUserId(null);
+          }
+        }
+      });
+
+      room.on(RoomEvent.Disconnected, () => {
+        console.log("[LIVEKIT] Room disconnected");
+        connectedMeetingIdRef.current = null;
+        setIsReconnecting(false);
+      });
+
+      room.on(RoomEvent.Reconnecting, () => {
+        console.log("[LIVEKIT] Room reconnecting");
+        setIsReconnecting(true);
+      });
+
+      room.on(RoomEvent.Reconnected, () => {
+        console.log("[LIVEKIT] Room reconnected");
+        reconnectAttemptRef.current += 1;
+        setIsReconnecting(false);
+        rebuildRemoteStateFromRoom(room);
+
+        if (socket?.connected && meetingId) {
+          socket.emit("meeting-media-state", {
+            meetingId,
+            isMuted,
+            isVideoOff,
+          });
+          socket.emit("meeting-hand-raise", {
+            meetingId,
+            userId: currentUserIdStr,
+            handRaised,
+          });
+        }
+      });
+
+      console.log("[LIVEKIT] Connecting to room with URL:", tokenData.url);
+      await room.connect(tokenData.url, tokenData.token);
+      console.log("[LIVEKIT] Connected to room successfully!");
+
+      const publishPromises = [];
+      for (const mediaTrack of localStreamRef.current.getTracks()) {
+        console.log("[LIVEKIT] Publishing track:", mediaTrack.kind);
+        publishPromises.push(room.localParticipant.publishTrack(mediaTrack));
+      }
+      await Promise.all(publishPromises);
+      console.log("[LIVEKIT] All tracks published");
+
+      room.remoteParticipants.forEach((participant) => {
+        participant.trackPublications.forEach((pub) => {
+          if (pub.isSubscribed && pub.track) {
+            attachTrack(participant.identity, pub.track, pub.source || pub.track.source);
+          }
+        });
+      });
+
+      roomRef.current = room;
+      connectedMeetingIdRef.current = String(meetingId);
+      reconnectAttemptRef.current = 0;
+      console.log("[LIVEKIT] Room connection complete!");
+    } catch (error) {
+      console.error("[LIVEKIT] Connection error:", error);
+      throw error;
+    }
+  }, [
+    attachTrack,
+    currentUserIdStr,
+    detachTrack,
+    disconnectRoom,
+    handRaised,
+    isMuted,
+    isVideoOff,
+    meetingId,
+    removeParticipantStreams,
+    rebuildRemoteStateFromRoom,
+    screenShareUserId,
+    socket,
+  ]);
+
+  const cleanup = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch {
+        // no-op
+      }
+    }
+
+    disconnectRoom();
+
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
     }
+
     setLocalStream(null);
-    setRemoteStreams({});
-    setMediaError(null);
+    setIsMuted(false);
+    setIsVideoOff(false);
     setIsScreenSharing(false);
-    setScreenShareUserId(null);
+    setMediaError(null);
     setRemoteMediaStates({});
-  }, []);
+    setRemoteRecordingState({
+      isRecording: false,
+      startedAt: null,
+      startedByName: null,
+      startedByUserId: null,
+      updatedAt: null,
+    });
+    setHandRaised(false);
+    setIsRecording(false);
+    setRecordingElapsedSeconds(0);
+  }, [disconnectRoom]);
 
-  // ---- Toggle mute ----
-  const toggleMute = useCallback(() => {
-    if (!localStreamRef.current) return;
-    const audioTrack = localStreamRef.current.getAudioTracks()[0];
-    if (audioTrack) {
-      const newMuted = !isMuted;
-      audioTrack.enabled = !newMuted;
-      setIsMuted(newMuted);
-      // Broadcast state
-      if (socketRef.current?.connected && meetingIdRef.current) {
-        socketRef.current.emit("meeting-media-state", {
-          meetingId: meetingIdRef.current,
-          isMuted: newMuted,
-          isVideoOff,
-        });
-      }
+  const releaseRecordingRenderResources = useCallback(() => {
+    const resources = recordingRenderRef.current;
+
+    if (resources.rafId) {
+      cancelAnimationFrame(resources.rafId);
+      resources.rafId = null;
     }
-  }, [isMuted, isVideoOff]);
 
-  // ---- Toggle video ----
-  const toggleVideo = useCallback(() => {
-    if (!localStreamRef.current) return;
-    const videoTrack = localStreamRef.current.getVideoTracks()[0];
-    if (videoTrack) {
-      const newVideoOff = !isVideoOff;
-      videoTrack.enabled = !newVideoOff;
-      setIsVideoOff(newVideoOff);
-      // Broadcast state
-      if (socketRef.current?.connected && meetingIdRef.current) {
-        socketRef.current.emit("meeting-media-state", {
-          meetingId: meetingIdRef.current,
-          isMuted,
-          isVideoOff: newVideoOff,
-        });
-      }
-    }
-  }, [isVideoOff, isMuted]);
-
-  // ---- Screen sharing ----
-  const startScreenShare = useCallback(async () => {
-    if (isScreenSharing) return;
-    try {
-      // Use minimal constraints for maximum compatibility (especially Linux/Wayland).
-      // Overly specific constraints can cause empty picker on some platforms.
-      let screenStream;
+    resources.videoEls.forEach((videoEl) => {
       try {
-        screenStream = await navigator.mediaDevices.getDisplayMedia({
-          video: {
-            cursor: "always",
-          },
-          audio: false,
-        });
-      } catch (firstErr) {
-        // Fallback: try with bare minimum constraints
-        if (firstErr.name === "NotAllowedError" || firstErr.name === "AbortError") {
-          throw firstErr; // user cancelled — don't retry
-        }
-        console.warn("[MEETING_CALL] Retrying getDisplayMedia with minimal constraints", firstErr);
-        screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-      }
-
-      const screenTrack = screenStream.getVideoTracks()[0];
-      if (!screenTrack) {
-        screenStream.getTracks().forEach((t) => t.stop());
-        throw new Error("No video track returned from screen share");
-      }
-      screenStreamRef.current = screenStream;
-
-      // Save original camera track (keep it; we add screen as second track)
-      if (localStreamRef.current) {
-        originalVideoTrackRef.current = localStreamRef.current.getVideoTracks()[0] || null;
-      }
-
-      // Add screen track to all peer connections (keep camera track so both are sent)
-      const screenStreamForSend = new MediaStream([screenTrack]);
-      const socket = socketRef.current;
-      const meetingId = meetingIdRef.current;
-      for (const remoteIdStr of Object.keys(peerConnectionsRef.current)) {
-        const pc = peerConnectionsRef.current[remoteIdStr];
-        if (!pc) continue;
-        try {
-          pc.addTrack(screenTrack, screenStreamForSend);
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          if (socket?.connected && meetingId) {
-            socket.emit("meeting-webrtc-offer", {
-              meetingId,
-              toUserId: remoteIdStr,
-              sdp: pc.localDescription,
-            });
-          }
-        } catch (err) {
-          console.error("[MEETING_CALL] addTrack/createOffer screen error:", err);
-        }
-      }
-
-      // Local preview: show screen (camera still in peer send)
-      if (localStreamRef.current && originalVideoTrackRef.current) {
-        localStreamRef.current.removeTrack(originalVideoTrackRef.current);
-        localStreamRef.current.addTrack(screenTrack);
-        setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
-      }
-
-      setIsScreenSharing(true);
-      setScreenShareUserId(currentUserIdStr);
-
-      // Notify others via socket
-      if (socketRef.current?.connected && meetingIdRef.current) {
-        socketRef.current.emit("meeting-screen-share-start", {
-          meetingId: meetingIdRef.current,
-        });
-      }
-
-      // Auto-stop when user clicks "Stop sharing" in browser UI
-      screenTrack.onended = () => {
-        stopScreenShare();
-      };
-    } catch (err) {
-      if (err.name === "NotAllowedError" || err.name === "AbortError") {
-        // User cancelled the picker — do nothing
-        console.log("[MEETING_CALL] Screen share cancelled by user");
-        return;
-      }
-      console.error("[MEETING_CALL] startScreenShare error:", err);
-
-      // Detect Wayland/PipeWire issue and show helpful message
-      const isLinux = navigator.userAgent.includes("Linux");
-      if (isLinux && (err.name === "NotFoundError" || err.name === "NotReadableError" || err.message?.includes("track"))) {
-        const msg =
-          "Screen sharing failed. On Linux (Wayland), launch Chrome with:\n" +
-          "google-chrome --enable-features=WebRTCPipeWireCapturer";
-        console.warn(msg);
-        setMediaError(msg);
-      }
-    }
-  }, [isScreenSharing, currentUserIdStr]);
-
-  const stopScreenShare = useCallback(async () => {
-    if (!isScreenSharing && !screenStreamRef.current) return;
-
-    // Stop screen tracks and remove senders; renegotiate so remote stops receiving
-    const screenStream = screenStreamRef.current;
-    const socket = socketRef.current;
-    const meetingId = meetingIdRef.current;
-    if (screenStream) {
-      const screenTrack = screenStream.getVideoTracks()[0];
-      screenStream.getTracks().forEach((t) => t.stop());
-      if (screenTrack) {
-        for (const remoteIdStr of Object.keys(peerConnectionsRef.current)) {
-          const pc = peerConnectionsRef.current[remoteIdStr];
-          if (!pc) continue;
-          const sender = pc.getSenders().find((s) => s.track === screenTrack);
-          if (sender) {
-            pc.removeTrack(sender);
-            try {
-              const offer = await pc.createOffer();
-              await pc.setLocalDescription(offer);
-              if (socket?.connected && meetingId) {
-                socket.emit("meeting-webrtc-offer", {
-                  meetingId,
-                  toUserId: remoteIdStr,
-                  sdp: pc.localDescription,
-                });
-              }
-            } catch (err) {
-              console.warn("[MEETING_CALL] renegotiate after stopScreenShare:", err);
-            }
-          }
-        }
-      }
-    }
-
-    // Restore local preview to camera
-    const origTrack = originalVideoTrackRef.current;
-    if (origTrack && localStreamRef.current) {
-      const currentVideo = localStreamRef.current.getVideoTracks()[0];
-      if (currentVideo) localStreamRef.current.removeTrack(currentVideo);
-      localStreamRef.current.addTrack(origTrack);
-      setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
-    }
-
-    screenStreamRef.current = null;
-    originalVideoTrackRef.current = null;
-    setIsScreenSharing(false);
-    setScreenShareUserId(null);
-
-    if (socketRef.current?.connected && meetingIdRef.current) {
-      socketRef.current.emit("meeting-screen-share-stop", {
-        meetingId: meetingIdRef.current,
-      });
-    }
-  }, [isScreenSharing]);
-
-  const toggleScreenShare = useCallback(() => {
-    if (isScreenSharing) {
-      stopScreenShare();
-    } else {
-      startScreenShare();
-    }
-  }, [isScreenSharing, startScreenShare, stopScreenShare]);
-
-  // ---- Hand raise ----
-  const [handRaised, setHandRaised] = useState(false);
-  const toggleHandRaise = useCallback(() => {
-    const newRaised = !handRaised;
-    setHandRaised(newRaised);
-    if (socketRef.current?.connected && meetingIdRef.current) {
-      socketRef.current.emit("meeting-hand-raise", {
-        meetingId: meetingIdRef.current,
-        raised: newRaised,
-      });
-    }
-  }, [handRaised]);
-
-  // ---- Start media ----
-  const startMedia = useCallback(async () => {
-    setMediaError(null);
-    try {
-      const stream = await requestMediaPermissions({ audio: true, video: true });
-      localStreamRef.current = stream;
-      setLocalStream(stream);
-      setIsVideoOff(false);
-      setIsMuted(false);
-      setHandRaised(false);
-      return stream;
-    } catch (err) {
-      const msg =
-        err instanceof PermissionDeniedError
-          ? err.message
-          : "Camera and microphone access denied";
-      setMediaError(msg);
-      throw err;
-    }
-  }, []);
-
-  // ---- Listen for remote media-state / hand-raise / screen-share events ----
-  useEffect(() => {
-    if (!socket || !meetingId) return;
-
-    const handleMediaState = (data) => {
-      if (data.meetingId !== meetingId) return;
-      setRemoteMediaStates((prev) => ({
-        ...prev,
-        [data.userId]: {
-          ...(prev[data.userId] || {}),
-          isMuted: data.isMuted,
-          isVideoOff: data.isVideoOff,
-        },
-      }));
-    };
-
-    const handleHandRaise = (data) => {
-      if (data.meetingId !== meetingId) return;
-      if (String(data.userId) === currentUserIdStr) return; // own event echoed
-      setRemoteMediaStates((prev) => ({
-        ...prev,
-        [data.userId]: {
-          ...(prev[data.userId] || {}),
-          handRaised: data.raised,
-        },
-      }));
-    };
-
-    const handleScreenStart = (data) => {
-      if (data.meetingId !== meetingId) return;
-      const sharerId = String(data.userId);
-      setScreenShareUserId(sharerId);
-      // Only one screen at a time: if someone else started sharing and I was sharing, stop mine
-      if (sharerId !== currentUserIdStr && isScreenSharing) {
-        stopScreenShare();
-      }
-    };
-
-    const handleScreenStop = (data) => {
-      if (data.meetingId !== meetingId) return;
-      const uid = String(data.userId);
-      setScreenShareUserId((prev) => (prev === uid ? null : prev));
-      const stream = remoteScreenStreamsRef.current[uid];
-      if (stream) stream.getTracks().forEach((t) => stream.removeTrack(t));
-      setRemoteScreenStreams((prev) => {
-        const next = { ...prev };
-        delete next[uid];
-        return next;
-      });
-    };
-
-    socket.on("meeting-media-state", handleMediaState);
-    socket.on("meeting-hand-raise", handleHandRaise);
-    socket.on("meeting-screen-share-start", handleScreenStart);
-    socket.on("meeting-screen-share-stop", handleScreenStop);
-
-    return () => {
-      socket.off("meeting-media-state", handleMediaState);
-      socket.off("meeting-hand-raise", handleHandRaise);
-      socket.off("meeting-screen-share-start", handleScreenStart);
-      socket.off("meeting-screen-share-stop", handleScreenStop);
-    };
-  }, [socket, meetingId, currentUserIdStr, isScreenSharing, stopScreenShare]);
-
-  // ---- WebRTC signaling listeners ----
-  useEffect(() => {
-    if (!socket || !currentUserIdStr || !meetingId) return;
-
-    const handleOffer = async (data) => {
-      const { fromUserId, meetingId: evtMeetingId, sdp } = data;
-      if (evtMeetingId !== meetingId) return;
-      const fromIdStr = String(fromUserId);
-      if (fromIdStr === currentUserIdStr) return;
-
-      const pc = getOrCreatePeerConnection(fromIdStr);
-      try {
-        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        socket.emit("meeting-webrtc-answer", {
-          meetingId,
-          toUserId: fromIdStr,
-          sdp: pc.localDescription,
-        });
-        await drainIceCandidates(fromIdStr);
-      } catch (err) {
-        console.error("[MEETING_CALL] handleOffer error:", err);
-      }
-    };
-
-    const handleAnswer = async (data) => {
-      const { fromUserId, meetingId: evtMeetingId, sdp } = data;
-      if (evtMeetingId !== meetingId) return;
-      const fromIdStr = String(fromUserId);
-      const pc = peerConnectionsRef.current[fromIdStr];
-      if (!pc) return;
-      try {
-        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-        await drainIceCandidates(fromIdStr);
-      } catch (err) {
-        console.error("[MEETING_CALL] setRemoteDescription answer error:", err);
-      }
-    };
-
-    const handleIce = async (data) => {
-      const { fromUserId, meetingId: evtMeetingId, candidate } = data;
-      if (evtMeetingId !== meetingId || !candidate) return;
-      const fromIdStr = String(fromUserId);
-      const pc = peerConnectionsRef.current[fromIdStr];
-      if (!pc) {
-        if (!iceCandidateBufferRef.current[fromIdStr]) iceCandidateBufferRef.current[fromIdStr] = [];
-        iceCandidateBufferRef.current[fromIdStr].push(candidate);
-        return;
-      }
-      if (!pc.remoteDescription) {
-        if (!iceCandidateBufferRef.current[fromIdStr]) iceCandidateBufferRef.current[fromIdStr] = [];
-        iceCandidateBufferRef.current[fromIdStr].push(candidate);
-        return;
-      }
-      try {
-        await pc.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (err) {
-        console.warn("[MEETING_CALL] addIceCandidate error:", err);
-      }
-    };
-
-    socket.on("meeting-webrtc-offer", handleOffer);
-    socket.on("meeting-webrtc-answer", handleAnswer);
-    socket.on("meeting-webrtc-ice", handleIce);
-
-    return () => {
-      socket.off("meeting-webrtc-offer", handleOffer);
-      socket.off("meeting-webrtc-answer", handleAnswer);
-      socket.off("meeting-webrtc-ice", handleIce);
-    };
-  }, [socket, currentUserIdStr, meetingId, getOrCreatePeerConnection, drainIceCandidates]);
-
-  // ---- Create offers: host to everyone (so joiners get host video); non-hosts to peers with id > self (one offer per pair) ----
-  useEffect(() => {
-    if (!socket || !currentUserIdStr || !meetingId || !localStreamRef.current) return;
-
-    const others = (roomParticipants || [])
-      .map((p) => String(p.userId))
-      .filter((id) => id !== currentUserIdStr);
-
-    const shouldOfferTo = (remoteIdStr) => {
-      if (isHost) return true;
-      return remoteIdStr > currentUserIdStr;
-    };
-
-    const createOffersTo = async (remoteIdStr) => {
-      if (!shouldOfferTo(remoteIdStr)) return;
-      if (peerConnectionsRef.current[remoteIdStr]) return;
-      const pc = getOrCreatePeerConnection(remoteIdStr);
-      try {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        socket.emit("meeting-webrtc-offer", {
-          meetingId,
-          toUserId: remoteIdStr,
-          sdp: pc.localDescription,
-        });
-      } catch (err) {
-        console.error("[MEETING_CALL] createOffer error:", err);
-      }
-    };
-
-    const run = () => others.forEach((id) => createOffersTo(id));
-    if (isHost && others.length > 0) {
-      const t = setTimeout(run, 150);
-      return () => clearTimeout(t);
-    }
-    run();
-  }, [socket, currentUserIdStr, meetingId, roomParticipants, localStream, isHost, getOrCreatePeerConnection]);
-
-  // ---- Remove peer connections for participants who left ----
-  useEffect(() => {
-    if (!meetingId) return;
-    const currentIds = new Set(
-      (roomParticipants || []).map((p) => String(p.userId)).filter((id) => id !== currentUserIdStr)
-    );
-    Object.keys(peerConnectionsRef.current).forEach((remoteId) => {
-      if (!currentIds.has(remoteId)) {
-        const pc = peerConnectionsRef.current[remoteId];
-        if (pc) {
-          try { pc.close(); } catch (_) {}
-          delete peerConnectionsRef.current[remoteId];
-        }
-        delete remoteStreamsRef.current[remoteId];
-        delete remoteScreenStreamsRef.current[remoteId];
-        setRemoteStreams((prev) => {
-          const next = { ...prev };
-          delete next[remoteId];
-          return next;
-        });
-        setRemoteScreenStreams((prev) => {
-          const next = { ...prev };
-          delete next[remoteId];
-          return next;
-        });
-        setRemoteMediaStates((prev) => {
-          const next = { ...prev };
-          delete next[remoteId];
-          return next;
-        });
+        videoEl.pause();
+        videoEl.srcObject = null;
+      } catch {
+        // no-op
       }
     });
-  }, [meetingId, roomParticipants, currentUserIdStr]);
+    resources.videoEls.clear();
 
-  // ---- Composite meeting recording (all participants in one video + mixed audio) ----
-  const canvasRef = useRef(null);
-  const canvasStreamRef = useRef(null);
-  const compositeRecorderRef = useRef(null);
-  const compositeChunksRef = useRef([]);
-  const recordingStartedAtRef = useRef(null);
-  const recordingAnimFrameRef = useRef(null);
+    resources.audioSources.forEach((sourceNode) => {
+      try {
+        sourceNode.disconnect();
+      } catch {
+        // no-op
+      }
+    });
+    resources.audioSources.clear();
 
-  const startRecording = useCallback((participants) => {
-    if (compositeRecorderRef.current) return;
+    if (resources.audioDestination) {
+      resources.audioDestination = null;
+    }
 
-    const CANVAS_W = 1280;
-    const CANVAS_H = 720;
+    if (resources.audioContext) {
+      resources.audioContext.close().catch(() => {
+        // no-op
+      });
+      resources.audioContext = null;
+    }
 
-    // Create an offscreen canvas
+    resources.canvas = null;
+    resources.canvasCtx = null;
+  }, []);
+
+  const startMedia = useCallback(async () => {
+    if (localStreamRef.current) {
+      return localStreamRef.current;
+    }
+
+    try {
+      setMediaError(null);
+      const stream = await requestMediaPermissions({ audio: true, video: true });
+
+      localStreamRef.current = stream;
+      setLocalStream(stream);
+      setIsMuted(false);
+      setIsVideoOff(false);
+
+      await connectRoom();
+
+      return stream;
+    } catch (error) {
+      const message = error instanceof PermissionDeniedError
+        ? error.message
+        : error?.message || "Failed to access camera/microphone";
+      setMediaError(message);
+      throw error;
+    }
+  }, [connectRoom]);
+
+  const toggleMute = useCallback(() => {
+    if (!localStreamRef.current) return;
+
+    const audioTrack = localStreamRef.current.getAudioTracks()[0];
+    if (!audioTrack) return;
+
+    const newMuted = !isMuted;
+    audioTrack.enabled = !newMuted;
+    setIsMuted(newMuted);
+
+    if (socket?.connected && meetingId) {
+      socket.emit("meeting-media-state", {
+        meetingId,
+        isMuted: newMuted,
+        isVideoOff,
+      });
+    }
+  }, [isMuted, isVideoOff, meetingId, socket]);
+
+  const toggleVideo = useCallback(() => {
+    if (!localStreamRef.current) return;
+
+    const videoTrack = localStreamRef.current.getVideoTracks()[0];
+    if (!videoTrack) return;
+
+    const newVideoOff = !isVideoOff;
+    videoTrack.enabled = !newVideoOff;
+    setIsVideoOff(newVideoOff);
+
+    if (socket?.connected && meetingId) {
+      socket.emit("meeting-media-state", {
+        meetingId,
+        isMuted,
+        isVideoOff: newVideoOff,
+      });
+    }
+  }, [isMuted, isVideoOff, meetingId, socket]);
+
+  const toggleScreenShare = useCallback(async () => {
+    console.log("[SCREEN SHARE] toggleScreenShare called");
+    console.log("[SCREEN SHARE] roomRef.current:", !!roomRef.current);
+    console.log("[SCREEN SHARE] isScreenSharing:", isScreenSharing);
+
+    if (!roomRef.current) {
+      console.error("[SCREEN SHARE] Room not connected! Cannot toggle screen share.");
+      setMediaError("Room not connected. Please wait for the meeting to load fully.");
+      return;
+    }
+
+    try {
+      const next = !isScreenSharing;
+      console.log("[SCREEN SHARE] Setting screen share to:", next);
+
+      await roomRef.current.localParticipant.setScreenShareEnabled(next);
+      console.log("[SCREEN SHARE] LiveKit screen share set successfully");
+
+      setIsScreenSharing(next);
+      setScreenShareUserId(next ? currentUserIdStr : null);
+
+      if (socket?.connected && meetingId) {
+        console.log("[SCREEN SHARE] Emitting socket event:", next ? "meeting-screen-share-start" : "meeting-screen-share-stop");
+        socket.emit(next ? "meeting-screen-share-start" : "meeting-screen-share-stop", {
+          meetingId,
+          userId: currentUserIdStr,
+        });
+      } else {
+        console.warn("[SCREEN SHARE] Socket not connected or meetingId missing", { socketConnected: socket?.connected, meetingId });
+      }
+    } catch (error) {
+      console.error("[SCREEN SHARE] Error:", error);
+      const errorMsg = error?.message || "Failed to toggle screen sharing";
+      setMediaError(errorMsg);
+    }
+  }, [currentUserIdStr, isScreenSharing, meetingId, socket]);
+
+  const toggleHandRaise = useCallback(() => {
+    const next = !handRaised;
+    setHandRaised(next);
+
+    if (socket?.connected && meetingId) {
+      socket.emit("meeting-hand-raise", {
+        meetingId,
+        userId: currentUserIdStr,
+        handRaised: next,
+      });
+    }
+  }, [currentUserIdStr, handRaised, meetingId, socket]);
+
+  const buildRecordingStream = useCallback(() => {
+    releaseRecordingRenderResources();
+
+    const resources = recordingRenderRef.current;
     const canvas = document.createElement("canvas");
-    canvas.width = CANVAS_W;
-    canvas.height = CANVAS_H;
-    canvasRef.current = canvas;
-    const ctx = canvas.getContext("2d");
+    const width = 1280;
+    const height = 720;
+    const gap = 8;
 
-    // Hidden video elements for drawing frames
-    const videoElements = {};
+    canvas.width = width;
+    canvas.height = height;
 
-    const getOrCreateVideo = (stream, id) => {
-      if (videoElements[id] && videoElements[id].srcObject === stream) return videoElements[id];
-      const vid = document.createElement("video");
-      vid.srcObject = stream;
-      vid.muted = true;
-      vid.playsInline = true;
-      vid.play().catch(() => {});
-      videoElements[id] = vid;
-      return vid;
-    };
+    const ctx = canvas.getContext("2d", { alpha: false });
+    resources.canvas = canvas;
+    resources.canvasCtx = ctx;
 
-    // Draw loop
-    const draw = () => {
-      // Gather all streams: local + remotes
-      const streams = [];
+    if (!ctx) {
+      throw new Error("Failed to initialize meeting recording canvas");
+    }
+
+    const readSources = () => {
+      const sources = [];
+
       if (localStreamRef.current) {
-        streams.push({ id: currentUserIdStr, stream: localStreamRef.current });
-      }
-      const remoteIds = Object.keys(remoteStreamsRef.current);
-      for (const uid of remoteIds) {
-        const s = remoteStreamsRef.current[uid];
-        if (s && s.getVideoTracks().length > 0) {
-          streams.push({ id: uid, stream: s });
-        }
+        sources.push({
+          key: `local:${currentUserIdStr || "me"}`,
+          label: "You",
+          stream: localStreamRef.current,
+        });
       }
 
-      // Clear canvas
-      ctx.fillStyle = "#18181b";
-      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-
-      const count = streams.length || 1;
-      const cols = count <= 1 ? 1 : count <= 4 ? 2 : count <= 9 ? 3 : 4;
-      const rows = Math.ceil(count / cols);
-      const cellW = CANVAS_W / cols;
-      const cellH = CANVAS_H / rows;
-      const padding = 4;
-
-      streams.forEach((entry, i) => {
-        const col = i % cols;
-        const row = Math.floor(i / cols);
-        const x = col * cellW + padding;
-        const y = row * cellH + padding;
-        const w = cellW - padding * 2;
-        const h = cellH - padding * 2;
-
-        // Rounded rect background
-        ctx.fillStyle = "#27272a";
-        ctx.beginPath();
-        ctx.roundRect(x, y, w, h, 8);
-        ctx.fill();
-
-        const vid = getOrCreateVideo(entry.stream, entry.id);
-        if (vid.readyState >= 2 && vid.videoWidth > 0) {
-          // Maintain aspect ratio (cover)
-          const vw = vid.videoWidth;
-          const vh = vid.videoHeight;
-          const scale = Math.max(w / vw, h / vh);
-          const sw = w / scale;
-          const sh = h / scale;
-          const sx = (vw - sw) / 2;
-          const sy = (vh - sh) / 2;
-
-          ctx.save();
-          ctx.beginPath();
-          ctx.roundRect(x, y, w, h, 8);
-          ctx.clip();
-          ctx.drawImage(vid, sx, sy, sw, sh, x, y, w, h);
-          ctx.restore();
-        }
-
-        // Name label
-        const participantsList = participants || [];
-        const p = participantsList.find((pp) => String(pp.userId) === String(entry.id));
-        const name = p?.name || (entry.id === currentUserIdStr ? "You" : "Participant");
-        ctx.fillStyle = "rgba(0,0,0,0.55)";
-        ctx.fillRect(x, y + h - 22, Math.min(ctx.measureText(name).width + 16, w), 22);
-        ctx.fillStyle = "#fff";
-        ctx.font = "12px sans-serif";
-        ctx.fillText(name, x + 8, y + h - 7);
+      Object.entries(remoteStreamsRef.current).forEach(([uid, stream], index) => {
+        sources.push({
+          key: `remote:${uid}`,
+          label:
+            remoteMediaStates[uid]?.name ||
+            `Participant ${index + 1}`,
+          stream,
+        });
       });
 
-      recordingAnimFrameRef.current = requestAnimationFrame(draw);
+      Object.entries(remoteScreenStreamsRef.current).forEach(([uid, stream], index) => {
+        sources.push({
+          key: `screen:${uid}`,
+          label:
+            remoteMediaStates[uid]?.name ||
+            `Screen Share ${index + 1}`,
+          stream,
+        });
+      });
+
+      return sources;
     };
 
-    draw();
-
-    // Create canvas stream (video from canvas + mixed audio from all streams)
-    const canvasStream = canvas.captureStream(24); // 24fps
-    canvasStreamRef.current = canvasStream;
-
-    // Mix all audio tracks into one
-    const audioCtx = new AudioContext();
-    const destination = audioCtx.createMediaStreamDestination();
-
-    if (localStreamRef.current) {
-      const audioTracks = localStreamRef.current.getAudioTracks();
-      if (audioTracks.length > 0) {
-        const source = audioCtx.createMediaStreamSource(new MediaStream(audioTracks));
-        source.connect(destination);
+    const ensureVideoEl = (source) => {
+      const existing = resources.videoEls.get(source.key);
+      if (existing && existing.srcObject === source.stream) {
+        return existing;
       }
-    }
-    for (const uid of Object.keys(remoteStreamsRef.current)) {
-      const s = remoteStreamsRef.current[uid];
-      if (s) {
-        const audioTracks = s.getAudioTracks();
-        if (audioTracks.length > 0) {
-          const source = audioCtx.createMediaStreamSource(new MediaStream(audioTracks));
-          source.connect(destination);
+
+      const videoEl = document.createElement("video");
+      videoEl.autoplay = true;
+      videoEl.muted = true;
+      videoEl.playsInline = true;
+      videoEl.srcObject = source.stream;
+      videoEl.play().catch(() => {
+        // no-op
+      });
+
+      resources.videoEls.set(source.key, videoEl);
+      return videoEl;
+    };
+
+    const syncAudioMix = (sources) => {
+      if (!resources.audioContext) {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+
+        resources.audioContext = new AudioCtx();
+        resources.audioDestination = resources.audioContext.createMediaStreamDestination();
+      }
+
+      const activeTrackKeys = new Set();
+
+      sources.forEach((source) => {
+        source.stream.getAudioTracks().forEach((audioTrack) => {
+          if (audioTrack.readyState !== "live") return;
+
+          const trackKey = `${source.key}:${audioTrack.id}`;
+          activeTrackKeys.add(trackKey);
+
+          if (!resources.audioSources.has(trackKey)) {
+            try {
+              const audioStream = new MediaStream([audioTrack]);
+              const sourceNode = resources.audioContext.createMediaStreamSource(audioStream);
+              sourceNode.connect(resources.audioDestination);
+              resources.audioSources.set(trackKey, sourceNode);
+            } catch {
+              // no-op
+            }
+          }
+        });
+      });
+
+      Array.from(resources.audioSources.keys()).forEach((trackKey) => {
+        if (activeTrackKeys.has(trackKey)) return;
+
+        const sourceNode = resources.audioSources.get(trackKey);
+        try {
+          sourceNode?.disconnect();
+        } catch {
+          // no-op
         }
-      }
-    }
-
-    // Combine canvas video + mixed audio
-    const combinedStream = new MediaStream([
-      ...canvasStream.getVideoTracks(),
-      ...destination.stream.getAudioTracks(),
-    ]);
-
-    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
-      ? "video/webm;codecs=vp9,opus"
-      : MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")
-        ? "video/webm;codecs=vp8,opus"
-        : "video/webm";
-
-    compositeChunksRef.current = [];
-    const recorder = new MediaRecorder(combinedStream, { mimeType, videoBitsPerSecond: 2500000 });
-    recorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) compositeChunksRef.current.push(e.data);
+        resources.audioSources.delete(trackKey);
+      });
     };
-    recorder.start(1000);
-    compositeRecorderRef.current = recorder;
-    recordingStartedAtRef.current = new Date();
-    // Store audioCtx for cleanup
-    compositeRecorderRef.current._audioCtx = audioCtx;
-    compositeRecorderRef.current._videoElements = videoElements;
-    setIsRecording(true);
-  }, [currentUserIdStr]);
 
-  const stopRecording = useCallback(() => {
-    setIsRecording(false);
-    if (recordingAnimFrameRef.current) {
-      cancelAnimationFrame(recordingAnimFrameRef.current);
-      recordingAnimFrameRef.current = null;
-    }
+    const drawFrame = () => {
+      const sources = readSources();
+      syncAudioMix(sources);
 
-    const recorder = compositeRecorderRef.current;
-    compositeRecorderRef.current = null;
+      ctx.fillStyle = "#09090b";
+      ctx.fillRect(0, 0, width, height);
 
-    if (!recorder || recorder.state === "inactive") {
-      return Promise.resolve([]);
-    }
+      if (sources.length === 0) {
+        ctx.fillStyle = "#a1a1aa";
+        ctx.font = "28px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("Waiting for participants...", width / 2, height / 2);
+      } else {
+        const cols = Math.ceil(Math.sqrt(sources.length));
+        const rows = Math.ceil(sources.length / cols);
+        const tileWidth = Math.floor((width - gap * (cols + 1)) / cols);
+        const tileHeight = Math.floor((height - gap * (rows + 1)) / rows);
 
-    const startedAt = recordingStartedAtRef.current || new Date();
-    recordingStartedAtRef.current = null;
+        sources.forEach((source, idx) => {
+          const row = Math.floor(idx / cols);
+          const col = idx % cols;
+          const x = gap + col * (tileWidth + gap);
+          const y = gap + row * (tileHeight + gap);
+          const videoEl = ensureVideoEl(source);
 
-    return new Promise((resolve) => {
+          ctx.fillStyle = "#18181b";
+          ctx.fillRect(x, y, tileWidth, tileHeight);
+
+          const hasVideoTrack = source.stream.getVideoTracks().some((track) => track.readyState === "live");
+          if (hasVideoTrack && videoEl.readyState >= 2) {
+            ctx.drawImage(videoEl, x, y, tileWidth, tileHeight);
+          }
+
+          const badgeHeight = 28;
+          ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+          ctx.fillRect(x, y + tileHeight - badgeHeight, tileWidth, badgeHeight);
+          ctx.fillStyle = "#ffffff";
+          ctx.font = "14px sans-serif";
+          ctx.textAlign = "left";
+          ctx.fillText(source.label, x + 10, y + tileHeight - 10);
+        });
+      }
+
+      resources.rafId = requestAnimationFrame(drawFrame);
+    };
+
+    drawFrame();
+
+    const canvasStream = canvas.captureStream(30);
+    const recordingStream = new MediaStream();
+
+    canvasStream.getVideoTracks().forEach((track) => recordingStream.addTrack(track));
+    resources.audioDestination?.stream?.getAudioTracks().forEach((track) => recordingStream.addTrack(track));
+
+    return recordingStream;
+  }, [currentUserIdStr, releaseRecordingRenderResources, remoteMediaStates]);
+
+  const startRecording = useCallback(() => {
+    if (isRecording) return;
+
+    try {
+      const stream = buildRecordingStream();
+      if (stream.getTracks().length === 0) {
+        throw new Error("No media available to record");
+      }
+
+      const mimeType = chooseRecorderMimeType();
+      const recorder = new MediaRecorder(stream, { mimeType });
+
+      recordingChunksRef.current = [];
+      recordingStartedAtRef.current = new Date();
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          recordingChunksRef.current.push(event.data);
+        }
+      };
+
       recorder.onstop = () => {
-        const chunks = compositeChunksRef.current;
-        compositeChunksRef.current = [];
+        const chunks = recordingChunksRef.current;
+        recordingChunksRef.current = [];
 
-        // Cleanup
-        if (recorder._audioCtx) {
-          try { recorder._audioCtx.close(); } catch (_) {}
-        }
-        if (recorder._videoElements) {
-          Object.values(recorder._videoElements).forEach((v) => {
-            v.srcObject = null;
-          });
-        }
-        if (canvasStreamRef.current) {
-          canvasStreamRef.current.getTracks().forEach((t) => t.stop());
-          canvasStreamRef.current = null;
-        }
-        canvasRef.current = null;
+        const resolve = stopRecordingResolveRef.current;
+        stopRecordingResolveRef.current = null;
 
-        if (chunks.length === 0) {
+        if (!resolve) return;
+
+        if (!chunks.length) {
           resolve([]);
           return;
         }
@@ -821,17 +782,153 @@ export function useMeetingCall(socket, currentUserId, currentUserName, meetingId
         resolve([
           {
             blob,
-            participantId: currentUserIdStr || "composite",
-            participantName: "Meeting Recording",
+            participantId: currentUserIdStr || "meeting",
+            participantName: currentUserName || "Meeting Recording",
             type: "video",
-            startedAt,
+            startedAt: recordingStartedAtRef.current || new Date(),
             endedAt: new Date(),
           },
         ]);
       };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start(1000);
+      setIsRecording(true);
+      setRecordingElapsedSeconds(0);
+      return true;
+    } catch (error) {
+      setMediaError(error?.message || "Failed to start recording");
+      return false;
+    }
+  }, [buildRecordingStream, currentUserIdStr, currentUserName, isRecording]);
+
+  const stopRecording = useCallback(() => {
+    return new Promise((resolve) => {
+      const recorder = mediaRecorderRef.current;
+      if (!recorder || recorder.state === "inactive") {
+        resolve([]);
+        return;
+      }
+
+      stopRecordingResolveRef.current = resolve;
+      setIsRecording(false);
       recorder.stop();
+      mediaRecorderRef.current = null;
+      recordingStartedAtRef.current = null;
+      releaseRecordingRenderResources();
     });
-  }, [currentUserIdStr]);
+  }, [releaseRecordingRenderResources]);
+
+  useEffect(() => {
+    if (!isRecording || !recordingStartedAtRef.current) {
+      setRecordingElapsedSeconds(0);
+      return;
+    }
+
+    const tick = () => {
+      const startedAt = recordingStartedAtRef.current;
+      if (!startedAt) return;
+      const elapsed = Math.max(0, Math.floor((Date.now() - startedAt.getTime()) / 1000));
+      setRecordingElapsedSeconds(elapsed);
+    };
+
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [isRecording]);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const onRemoteMediaState = (data) => {
+      if (String(data?.meetingId) !== String(meetingId)) return;
+      const uid = String(data.userId);
+      if (uid === currentUserIdStr) return;
+
+      setRemoteMediaStates((prev) => ({
+        ...prev,
+        [uid]: {
+          ...(prev[uid] || {}),
+          isMuted: !!data.isMuted,
+          isVideoOff: !!data.isVideoOff,
+        },
+      }));
+    };
+
+    const onHandRaise = (data) => {
+      if (String(data?.meetingId) !== String(meetingId)) return;
+      const uid = String(data.userId);
+      if (uid === currentUserIdStr) return;
+      const nextHandRaised =
+        typeof data.handRaised === "boolean"
+          ? data.handRaised
+          : !!data.raised;
+
+      setRemoteMediaStates((prev) => ({
+        ...prev,
+        [uid]: {
+          ...(prev[uid] || {}),
+          handRaised: nextHandRaised,
+        },
+      }));
+    };
+
+    const onScreenShareStart = (data) => {
+      if (String(data?.meetingId) !== String(meetingId)) return;
+      setScreenShareUserId(String(data.userId));
+    };
+
+    const onScreenShareStop = (data) => {
+      if (String(data?.meetingId) !== String(meetingId)) return;
+      setScreenShareUserId((prev) => (String(prev) === String(data.userId) ? null : prev));
+    };
+
+    const onRecordingState = (data) => {
+      if (String(data?.meetingId) !== String(meetingId)) return;
+
+      setRemoteRecordingState({
+        isRecording: !!data?.isRecording,
+        startedAt: data?.startedAt || null,
+        startedByName: data?.startedByName || null,
+        startedByUserId: data?.startedByUserId || null,
+        updatedAt: data?.updatedAt || null,
+      });
+    };
+
+    socket.on("meeting-media-state", onRemoteMediaState);
+    socket.on("meeting-hand-raise", onHandRaise);
+    socket.on("meeting-screen-share-start", onScreenShareStart);
+    socket.on("meeting-screen-share-stop", onScreenShareStop);
+    socket.on("meeting-recording-state", onRecordingState);
+
+    return () => {
+      socket.off("meeting-media-state", onRemoteMediaState);
+      socket.off("meeting-hand-raise", onHandRaise);
+      socket.off("meeting-screen-share-start", onScreenShareStart);
+      socket.off("meeting-screen-share-stop", onScreenShareStop);
+      socket.off("meeting-recording-state", onRecordingState);
+    };
+  }, [currentUserIdStr, meetingId, socket]);
+
+  useEffect(() => {
+    if (!meetingId) {
+      disconnectRoom();
+      return;
+    }
+
+    if (localStreamRef.current) {
+      connectRoom().catch((error) => {
+        setMediaError(error?.message || "Failed to connect to meeting room");
+      });
+    }
+  }, [connectRoom, disconnectRoom, meetingId]);
+
+  useEffect(() => {
+    return () => {
+      releaseRecordingRenderResources();
+      cleanup();
+    };
+  }, [cleanup, releaseRecordingRenderResources]);
 
   return {
     localStream,
@@ -844,7 +941,10 @@ export function useMeetingCall(socket, currentUserId, currentUserName, meetingId
     handRaised,
     remoteMediaStates,
     mediaError,
+    isReconnecting,
     isRecording,
+    recordingElapsedSeconds,
+    remoteRecordingState,
     startRecording,
     stopRecording,
     startMedia,

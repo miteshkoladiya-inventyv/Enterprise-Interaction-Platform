@@ -2,6 +2,8 @@ import { getReceiverSocketId, getOnlineUsers, getUserCallStatus, setUserCallStat
 import { ChannelMember } from "../../models/ChannelMember.js";
 import { ChatChannel } from "../../models/ChatChannel.js";
 import User from "../../models/User.js";
+import { createLiveKitToken } from "../../services/livekit.service.js";
+import { Notification } from "../../models/Notification.js";
 
 // In-memory: channelId -> { initiatorId, initiatorName, channelName?, participantIds: string[] }
 const activeGroupCalls = {};
@@ -11,6 +13,11 @@ function getCallerName(u) {
   const first = u.first_name || "";
   const last = u.last_name || "";
   return [first, last].filter(Boolean).join(" ").trim() || u.email || "User";
+}
+
+function makeDirectRoomName(userA, userB) {
+  const [a, b] = [String(userA), String(userB)].sort();
+  return `direct-${a}-${b}`;
 }
 
 /**
@@ -67,6 +74,48 @@ export const requestCall = async (req, res) => {
 
     // Note: Call status will be set when call is accepted (in socket handler)
 
+    // Create notification for incoming call
+    const callerAvatar = callerUser?.profile_picture || null;
+    try {
+      const notification = new Notification({
+        user_id: toUserId,
+        type: callType === "video" ? "video_call" : "audio_call",
+        title: `Incoming ${callType} call from ${fromUserName}`,
+        body: `${fromUserName} is calling...`,
+        source_id: callerUserId,
+        source_type: "call",
+        sender_id: callerUserId,
+        sender_name: fromUserName,
+        sender_avatar: callerAvatar,
+        is_read: false,
+        action_url: "/calls",
+        metadata: {
+          callType,
+          callDuration: 0,
+        },
+      });
+
+      await notification.save();
+      console.log(`[CALL_NOTIFICATION] ✅ Created ${callType} call notification for user ${toUserId}`);
+
+      // Emit notification event to trigger frontend notification system
+      console.log(`[CALL_NOTIFICATION] 📨 Emitting notification:new event for call from ${fromUserName}`);
+      io.to(receiverSocketId).emit("notification:new", {
+        notification: {
+          _id: notification._id,
+          type: notification.type,
+          title: notification.title,
+          body: notification.body,
+          sender_name: notification.sender_name,
+          sender_avatar: notification.sender_avatar,
+          action_url: notification.action_url,
+        },
+      });
+    } catch (notificationError) {
+      console.warn("[CALL_NOTIFICATION] ⚠️ Failed to create notification:", notificationError.message);
+      // Don't fail the call if notification fails
+    }
+
     // Emit appropriate event based on call type
     const eventName = callType === "video" ? "incoming-video-call" : "incoming-audio-call";
     io.to(receiverSocketId).emit(eventName, {
@@ -81,6 +130,51 @@ export const requestCall = async (req, res) => {
   } catch (error) {
     console.error("[CALL] requestCall error:", error);
     return res.status(500).json({ error: error.message });
+  }
+};
+
+/**
+ * POST /api/call/livekit-token
+ * Body: { toUserId, callType?: "audio" | "video" }
+ */
+export const getDirectCallLiveKitToken = async (req, res) => {
+  try {
+    const { toUserId, callType = "audio" } = req.body;
+    const callerId = String(req.userId);
+    const calleeId = String(toUserId || "").trim();
+
+    if (!calleeId) {
+      return res.status(400).json({ error: "toUserId is required" });
+    }
+    if (calleeId === callerId) {
+      return res.status(400).json({ error: "Cannot start a call with yourself" });
+    }
+
+    const calleeUser = await User.findById(calleeId).select("_id").lean();
+    if (!calleeUser) {
+      return res.status(404).json({ error: "Target user not found" });
+    }
+
+    const roomName = makeDirectRoomName(callerId, calleeId);
+    const tokenResponse = await createLiveKitToken({
+      identity: callerId,
+      name: getCallerName(req.user),
+      roomName,
+      metadata: {
+        type: "direct-call",
+        callType,
+        fromUserId: callerId,
+        toUserId: calleeId,
+      },
+    });
+
+    return res.json({
+      roomName,
+      ...tokenResponse,
+    });
+  } catch (error) {
+    console.error("[CALL] getDirectCallLiveKitToken error:", error);
+    return res.status(500).json({ error: error.message || "Failed to generate LiveKit token" });
   }
 };
 
@@ -173,8 +267,12 @@ export const startGroupCall = async (req, res) => {
     const channelName = channel?.name || "Group";
 
     const members = await ChannelMember.find({ channel_id: channelId }).select("user_id");
+    const initiatorAvatar = user?.profile_picture || null;
+
     for (const m of members) {
-      const socketId = getReceiverSocketId(String(m.user_id));
+      const memberId = m.user_id._id || m.user_id;
+      const socketId = getReceiverSocketId(String(memberId));
+
       if (socketId) {
         io.to(socketId).emit("group-call-started", {
           channelId,
@@ -182,6 +280,37 @@ export const startGroupCall = async (req, res) => {
           initiatorId: userIdStr,
           initiatorName,
         });
+      }
+
+      // Create notification for all members except initiator
+      if (String(memberId) !== userIdStr) {
+        try {
+          const notification = new Notification({
+            user_id: memberId,
+            type: "group_call",
+            title: `Group call started in ${channelName}`,
+            body: `${initiatorName} started a call in ${channelName}`,
+            source_id: channelId,
+            source_type: "group_call",
+            channel_id: channelId,
+            sender_id: userId,
+            sender_name: initiatorName,
+            sender_avatar: initiatorAvatar,
+            is_read: false,
+            action_url: `/chat/${channelId}`,
+            metadata: {
+              channelName,
+              initiatorName,
+            },
+          });
+
+          await notification.save();
+        } catch (notificationError) {
+          console.warn(
+            `[CALL_NOTIFICATION] ⚠️ Failed to create group call notification for user ${memberId}:`,
+            notificationError.message
+          );
+        }
       }
     }
 
@@ -194,6 +323,50 @@ export const startGroupCall = async (req, res) => {
   } catch (error) {
     console.error("[CALL] startGroupCall error:", error);
     return res.status(500).json({ error: error.message });
+  }
+};
+
+/**
+ * POST /api/call/group/livekit-token
+ * Body: { channelId }
+ */
+export const getGroupCallLiveKitToken = async (req, res) => {
+  try {
+    const { channelId } = req.body;
+    const userId = String(req.userId);
+
+    if (!channelId) {
+      return res.status(400).json({ error: "channelId is required" });
+    }
+
+    const membership = await ChannelMember.findOne({
+      channel_id: channelId,
+      user_id: userId,
+    }).lean();
+
+    if (!membership) {
+      return res.status(403).json({ error: "Not a member of this channel" });
+    }
+
+    const roomName = `group-${String(channelId)}`;
+    const tokenResponse = await createLiveKitToken({
+      identity: userId,
+      name: getCallerName(req.user),
+      roomName,
+      metadata: {
+        type: "group-call",
+        channelId: String(channelId),
+        role: membership.role || "member",
+      },
+    });
+
+    return res.json({
+      roomName,
+      ...tokenResponse,
+    });
+  } catch (error) {
+    console.error("[CALL] getGroupCallLiveKitToken error:", error);
+    return res.status(500).json({ error: error.message || "Failed to generate LiveKit token" });
   }
 };
 

@@ -80,22 +80,180 @@ const messageSchema = new Schema(
         },
       },
     ],
+    // ===== PHASE 1: STARRED MESSAGES & MESSAGE PINNING =====
+    // Starred Messages
+    starred_by: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+    // Message Pinning
+    is_pinned: {
+      type: Boolean,
+      default: false,
+    },
+    pinned_at: {
+      type: Date,
+    },
+    pinned_by: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    pin_reason: {
+      type: String,
+    },
+    // ===== PHASE 2: RICH TEXT FORMATTING & @MENTIONS =====
+    // Rich Text Formatting
+    rich_content: {
+      format: {
+        type: String,
+        enum: ["html", "markdown", "plaintext"],
+        default: "plaintext",
+      },
+      styled_content: {
+        type: String, // HTML or markdown with formatting
+      },
+      plain_text: {
+        type: String, // Plain text version for search/fallback
+      },
+    },
+    // @Mentions
+    mentioned_users: [
+      {
+        user_id: {
+          type: Schema.Types.ObjectId,
+          ref: "User",
+        },
+        username: {
+          type: String,
+        },
+        mentioned_at: {
+          type: Date,
+          default: Date.now,
+        },
+        notification_sent: {
+          type: Boolean,
+          default: false,
+        },
+      },
+    ],
+    mention_notifications: [
+      {
+        user_id: {
+          type: Schema.Types.ObjectId,
+          ref: "User",
+        },
+        read_at: {
+          type: Date,
+        },
+      },
+    ],
+    // ===== PHASE 3: MESSAGE STATUS INDICATORS & REACTION ANALYTICS =====
+    // Message Delivery Status
+    delivered_to: [
+      {
+        user_id: {
+          type: Schema.Types.ObjectId,
+          ref: "User",
+        },
+        delivered_at: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
+    // Reaction Analytics
+    reaction_analytics: {
+      total_reactions: {
+        type: Number,
+        default: 0,
+      },
+      reactions_by_emoji: {
+        type: Map,
+        of: {
+          count: {
+            type: Number,
+            default: 0,
+          },
+          users: [
+            {
+              type: Schema.Types.ObjectId,
+              ref: "User",
+            },
+          ],
+          recent: [
+            {
+              user_id: {
+                type: Schema.Types.ObjectId,
+                ref: "User",
+              },
+              reacted_at: {
+                type: Date,
+                default: Date.now,
+              },
+            },
+          ],
+        },
+        default: new Map(),
+      },
+    },
   },
   {
     timestamps: { createdAt: "created_at", updatedAt: false },
   }
 );
 
-// Indexes
+// Indexes - single and compound
 messageSchema.index({ channel_id: 1, created_at: -1 });
 messageSchema.index({ sender_id: 1 });
 messageSchema.index({ parent_message_id: 1 });
 messageSchema.index({ "seen_by.user_id": 1 });
 messageSchema.index({ "reactions.user_id": 1 });
 
-// Virtual to check if all members have seen the message (for group chats)
-messageSchema.virtual("is_seen_by_all").get(function () {
+// Indexes for Phase 1 features: Starred Messages & Pinning
+messageSchema.index({ starred_by: 1 });
+messageSchema.index({ is_pinned: 1, channel_id: 1, pinned_at: -1 });
+messageSchema.index({ channel_id: 1, is_pinned: 1 });
+
+// Indexes for Phase 2 features: @Mentions & Rich Text
+messageSchema.index({ "mentioned_users.user_id": 1 });
+messageSchema.index({ "mention_notifications.user_id": 1 });
+
+// Indexes for Phase 3 features: Status Indicators & Reaction Analytics
+messageSchema.index({ "delivered_to.user_id": 1 });
+messageSchema.index({ channel_id: 1, "delivered_to.user_id": 1 });
+
+// Compound indexes for common queries
+messageSchema.index({ channel_id: 1, parent_message_id: 1, deleted_at: 1 });
+messageSchema.index({ channel_id: 1, sender_id: 1, created_at: -1 });
+
+// Text index for search functionality
+messageSchema.index({ content: "text" });
+
+// Virtual to check if message has been seen by at least one user
+messageSchema.virtual("is_seen_by_any").get(function () {
   return this.seen_by && this.seen_by.length > 0;
+});
+
+// Virtual for starred count (Phase 1)
+messageSchema.virtual("starred_count").get(function () {
+  return this.starred_by ? this.starred_by.length : 0;
+});
+
+// Virtual for delivered count (Phase 3)
+messageSchema.virtual("delivered_count").get(function () {
+  return this.delivered_to ? this.delivered_to.length : 0;
+});
+
+// Virtual for read count (Phase 3)
+messageSchema.virtual("read_count").get(function () {
+  return this.seen_by ? this.seen_by.length : 0;
+});
+
+// Virtual for total reactions (Phase 3)
+messageSchema.virtual("total_reactions_count").get(function () {
+  return this.reaction_analytics?.total_reactions || 0;
 });
 
 export const Message = model("Message", messageSchema);

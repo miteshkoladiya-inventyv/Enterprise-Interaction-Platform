@@ -2,22 +2,143 @@ import Meeting from "../../models/Meeting.js";
 import MeetingRecording from "../../models/MeetingRecording.js";
 import { cloudinary } from "../../config/cloudinary.js";
 import OpenAI from "openai";
-import fs from "fs";
+import { AssemblyAI } from "assemblyai";
+import { execFile } from "child_process";
+import fs from "fs/promises";
 import os from "os";
 import path from "path";
-import { execFile } from "child_process";
+import { promisify } from "util";
 import { fileURLToPath } from "url";
 import { evaluateCountryFeatureAccess } from "../../utils/crossCountryCollaboration.js";
 
+const execFileAsync = promisify(execFile);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Path to local Whisper venv Python binary and transcription script
-const WHISPER_PYTHON = process.env.WHISPER_PYTHON_PATH || "/home/hett/tools/experimentals/whisper/venv/bin/python3";
-const WHISPER_SCRIPT = path.resolve(__dirname, "../../scripts/whisper_transcribe.py");
-const WHISPER_MODEL = process.env.WHISPER_MODEL || "small";
+function getAssemblyAIClient() {
+  const apiKey = process.env.ASSEMBLYAI_API_KEY?.trim();
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  if (!apiKey) {
+    throw new Error("AssemblyAI API key is not configured. Set ASSEMBLYAI_API_KEY in backend/.env and restart the backend.");
+  }
+
+  return new AssemblyAI({ apiKey });
+}
+
+const ASSEMBLYAI_SPEECH_MODELS = ["universal-3-pro", "universal-2"];
+const TRANSCRIPTION_MODES = ["assemblyai", "local"];
+const LOCAL_WHISPER_SCRIPT_PATH = path.resolve(__dirname, "../../scripts/whisper_transcribe.py");
+const TRANSCRIPTION_TIMEOUT_MS = Number(process.env.TRANSCRIPTION_TIMEOUT_MS || 8 * 60 * 1000);
+
+function normalizeTranscriptionMode(mode) {
+  const normalized = String(mode || "assemblyai").trim().toLowerCase();
+  if (!TRANSCRIPTION_MODES.includes(normalized)) {
+    throw new Error(`Unsupported transcription mode: ${mode}`);
+  }
+  return normalized;
+}
+
+function withTimeout(promise, timeoutMs, label = "Operation") {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      const id = setTimeout(() => {
+        clearTimeout(id);
+        reject(new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)} seconds`));
+      }, timeoutMs);
+    }),
+  ]);
+}
+
+async function downloadRecordingToTempFile(recording) {
+  const url = new URL(recording.cloudinary_url);
+  const extension = path.extname(url.pathname) || ".webm";
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "meeting-recording-"));
+  const tempFilePath = path.join(tempDir, `recording${extension}`);
+
+  const response = await fetch(recording.cloudinary_url);
+  if (!response.ok) {
+    throw new Error(`Failed to download recording from Cloudinary (${response.status})`);
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  await fs.writeFile(tempFilePath, buffer);
+
+  return { tempDir, tempFilePath };
+}
+
+async function transcribeWithAssemblyAI(recording) {
+  const assemblyai = getAssemblyAIClient();
+  console.log(`🔄 [TRANSCRIPTION] Sending to AssemblyAI (speaker diarization enabled)...`);
+
+  const result = await assemblyai.transcripts.transcribe({
+    audio: recording.cloudinary_url,
+    speech_models: ASSEMBLYAI_SPEECH_MODELS,
+    speaker_labels: true,
+  });
+
+  if (result.status === "error") {
+    throw new Error(result.error || "AssemblyAI transcription failed");
+  }
+
+  return {
+    provider: "AssemblyAI",
+    text: result.text || "",
+    segments: (result.utterances || []).map((u) => ({
+      start: u.start / 1000,
+      end: u.end / 1000,
+      text: u.text?.trim() || "",
+      speaker: u.speaker || null,
+    })),
+  };
+}
+
+async function transcribeWithLocalWhisper(recording) {
+  const pythonPath = process.env.WHISPER_PYTHON_PATH?.trim();
+  const whisperModel = process.env.WHISPER_MODEL?.trim() || "small";
+
+  if (!pythonPath) {
+    throw new Error("Local Whisper is not configured. Set WHISPER_PYTHON_PATH in backend/.env and restart the backend.");
+  }
+
+  await fs.access(pythonPath);
+  await fs.access(LOCAL_WHISPER_SCRIPT_PATH);
+
+  console.log(`🔄 [TRANSCRIPTION] Downloading recording for local Whisper...`);
+  const { tempDir, tempFilePath } = await downloadRecordingToTempFile(recording);
+
+  try {
+    console.log(`🖥️  [TRANSCRIPTION] Running local Whisper (${whisperModel})...`);
+
+    const { stdout, stderr } = await execFileAsync(
+      pythonPath,
+      [LOCAL_WHISPER_SCRIPT_PATH, tempFilePath, "--model", whisperModel],
+      { maxBuffer: 20 * 1024 * 1024 }
+    );
+
+    if (stderr?.trim()) {
+      console.log(`🖥️  [TRANSCRIPTION] Local Whisper logs:\n${stderr.trim()}`);
+    }
+
+    const result = JSON.parse(stdout);
+    if (result.error) {
+      throw new Error(result.error);
+    }
+
+    return {
+      provider: "Local Whisper",
+      text: result.text || "",
+      segments: (result.segments || []).map((segment) => ({
+        start: Number(segment.start || 0),
+        end: Number(segment.end || 0),
+        text: segment.text?.trim() || "",
+        speaker: null,
+      })),
+    };
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
 
 // Groq client for LLM tasks (notes generation, chat) — uses OpenAI-compatible API
 const groq = new OpenAI({
@@ -121,18 +242,14 @@ export const uploadRecording = async (req, res) => {
       started_at: started,
       ended_at: ended,
       duration_seconds: durationSeconds,
-      transcription_status: "pending",
+      transcription_status: "not_started",
+      transcription_error: null,
     });
     await recording.save();
 
     console.log(`✅ [RECORDING UPLOAD] Saved to DB (id: ${recording._id})`);
     console.log(`🔗 [RECORDING UPLOAD] Cloudinary URL: ${result.secure_url}`);
-    console.log(`🎙️  [RECORDING UPLOAD] Kicking off background transcription...`);
-
-    // Kick off transcription in the background (don't block the response)
-    transcribeRecording(recording._id, req.file.buffer).catch((err) => {
-      console.error("❌ [TRANSCRIPTION] Background transcription error:", err);
-    });
+    console.log(`🎙️  [RECORDING UPLOAD] Transcription ready to start manually (Local Whisper or AssemblyAI)`);
 
     return res.status(201).json({
       data: {
@@ -190,11 +307,13 @@ export const listRecordings = async (req, res) => {
 };
 
 /**
- * Background helper: transcribe a recording using OpenAI Whisper, then update the DB record.
+ * Background helper: transcribe a recording using the selected provider, then update the DB record.
  */
-async function transcribeRecording(recordingId, fileBuffer) {
-  console.log(`\n🎙️  [TRANSCRIPTION] Starting for recording ${recordingId}`);
-  console.log(`📊 [TRANSCRIPTION] File buffer size: ${(fileBuffer.length / 1024 / 1024).toFixed(2)} MB`);
+async function transcribeRecording(recordingId, mode = "assemblyai") {
+  const transcriptionMode = normalizeTranscriptionMode(mode);
+  const providerLabel = transcriptionMode === "local" ? "Local Whisper" : "AssemblyAI";
+
+  console.log(`\n🎙️  [TRANSCRIPTION] Starting ${providerLabel} transcription for recording ${recordingId}`);
 
   const recording = await MeetingRecording.findById(recordingId);
   if (!recording) {
@@ -202,182 +321,84 @@ async function transcribeRecording(recordingId, fileBuffer) {
     return;
   }
 
-  try {
-    recording.transcription_status = "processing";
-    await recording.save();
-    console.log(`⏳ [TRANSCRIPTION] Status set to 'processing'`);
-
-    // Write buffer to a temporary file (OpenAI SDK requires a file path / readable stream)
-    const tmpDir = os.tmpdir();
-    const tmpFile = path.join(tmpDir, `rec-${recordingId}-${Date.now()}.webm`);
-    fs.writeFileSync(tmpFile, fileBuffer);
-    console.log(`💾 [TRANSCRIPTION] Temp file written: ${tmpFile}`);
-
-    try {
-      console.log(`🔄 [TRANSCRIPTION] Sending to OpenAI Whisper API (model: whisper-1)...`);
-      const startTime = Date.now();
-
-      // Use Whisper to transcribe with timestamps
-      const transcription = await openai.audio.transcriptions.create({
-        file: fs.createReadStream(tmpFile),
-        model: "whisper-1",
-        response_format: "verbose_json",
-        timestamp_granularities: ["segment"],
-      });
-
-      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-      console.log(`⏱️  [TRANSCRIPTION] Whisper API responded in ${elapsed}s`);
-
-      const fullText = transcription.text || "";
-
-      // Extract segment-level timestamps
-      const segments = (transcription.segments || []).map((seg) => ({
-        start: seg.start,
-        end: seg.end,
-        text: seg.text?.trim() || "",
-      }));
-
-      console.log(`📝 [TRANSCRIPTION] Full transcript length: ${fullText.length} chars`);
-      console.log(`🔢 [TRANSCRIPTION] Segments extracted: ${segments.length}`);
-      if (fullText.length > 0) {
-        console.log(`📝 [TRANSCRIPTION] Preview: "${fullText.substring(0, 150)}${fullText.length > 150 ? '...' : ''}"`);
-      } else {
-        console.log(`⚠️  [TRANSCRIPTION] Transcript is empty (silent audio or unrecognizable speech)`);
-      }
-
-      recording.transcript = fullText;
-      recording.transcript_segments = segments;
-      recording.transcription_status = "completed";
-      await recording.save();
-
-      console.log(`✅ [TRANSCRIPTION] Completed and saved for recording ${recordingId}`);
-    } finally {
-      // Clean up temp file
-      try {
-        fs.unlinkSync(tmpFile);
-        console.log(`🧹 [TRANSCRIPTION] Temp file cleaned up`);
-      } catch {
-        // ignore cleanup errors
-      }
-    }
-  } catch (error) {
-    console.error(`❌ [TRANSCRIPTION] Failed for recording ${recordingId}:`, error.message);
-    if (error.response) {
-      console.error(`❌ [TRANSCRIPTION] API response status: ${error.response.status}`);
-      console.error(`❌ [TRANSCRIPTION] API response data:`, error.response.data);
-    }
-    recording.transcription_status = "failed";
-    await recording.save();
-    console.log(`⚠️  [TRANSCRIPTION] Status set to 'failed'`);
-  }
-}
-
-/**
- * Background helper: transcribe a recording using local Whisper (Python subprocess), then update the DB record.
- */
-async function transcribeRecordingLocal(recordingId, fileBuffer) {
-  console.log(`\n🎙️  [LOCAL TRANSCRIPTION] Starting for recording ${recordingId}`);
-  console.log(`📊 [LOCAL TRANSCRIPTION] File buffer size: ${(fileBuffer.length / 1024 / 1024).toFixed(2)} MB`);
-
-  const recording = await MeetingRecording.findById(recordingId);
-  if (!recording) {
-    console.log(`❌ [LOCAL TRANSCRIPTION] Recording ${recordingId} not found in DB, aborting`);
+  if (recording.transcription_status === "cancelled") {
+    console.log(`⏹️  [TRANSCRIPTION] Recording ${recordingId} is cancelled, skipping transcription`);
     return;
   }
 
   try {
     recording.transcription_status = "processing";
+    recording.transcript = null;
+    recording.transcript_segments = [];
+    recording.transcription_error = null;
     await recording.save();
-    console.log(`⏳ [LOCAL TRANSCRIPTION] Status set to 'processing'`);
+    console.log(`⏳ [TRANSCRIPTION] Status set to 'processing'`);
 
-    // Write buffer to a temporary file
-    const tmpDir = os.tmpdir();
-    const tmpFile = path.join(tmpDir, `rec-${recordingId}-${Date.now()}.webm`);
-    fs.writeFileSync(tmpFile, fileBuffer);
-    console.log(`💾 [LOCAL TRANSCRIPTION] Temp file written: ${tmpFile}`);
+    const startTime = Date.now();
 
-    try {
-      console.log(`🔄 [LOCAL TRANSCRIPTION] Spawning local Whisper (model: ${WHISPER_MODEL})...`);
-      console.log(`🐍 [LOCAL TRANSCRIPTION] Python: ${WHISPER_PYTHON}`);
-      console.log(`📜 [LOCAL TRANSCRIPTION] Script: ${WHISPER_SCRIPT}`);
-      const startTime = Date.now();
+    const result = await withTimeout(
+      transcriptionMode === "local"
+        ? transcribeWithLocalWhisper(recording)
+        : transcribeWithAssemblyAI(recording),
+      TRANSCRIPTION_TIMEOUT_MS,
+      `${providerLabel} transcription`
+    );
 
-      const result = await new Promise((resolve, reject) => {
-        execFile(
-          WHISPER_PYTHON,
-          [WHISPER_SCRIPT, tmpFile, "--model", WHISPER_MODEL],
-          { timeout: 10 * 60 * 1000, maxBuffer: 50 * 1024 * 1024 }, // 10 min timeout, 50MB buffer
-          (error, stdout, stderr) => {
-            if (stderr) {
-              // Whisper prints progress to stderr, log it
-              stderr.split("\n").filter(Boolean).forEach((line) => {
-                console.log(`🐍 [LOCAL TRANSCRIPTION] ${line}`);
-              });
-            }
-            if (error) {
-              reject(new Error(error.message || "Whisper process failed"));
-              return;
-            }
-            try {
-              // Whisper may print extra lines to stdout (e.g. "Detected language: English")
-              // so extract the last line that looks like valid JSON
-              const lines = stdout.trim().split("\n");
-              let parsed = null;
-              for (let i = lines.length - 1; i >= 0; i--) {
-                const line = lines[i].trim();
-                if (line.startsWith("{")) {
-                  try { parsed = JSON.parse(line); break; } catch { /* try previous line */ }
-                }
-              }
-              if (!parsed) parsed = JSON.parse(stdout.trim()); // fallback: try full output
-              resolve(parsed);
-            } catch (parseErr) {
-              reject(new Error(`Failed to parse Whisper output: ${stdout.substring(0, 500)}`));
-            }
-          }
-        );
-      });
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    const fullText = (result.text || "").trim();
+    const segments = (result.segments || []).filter((segment) =>
+      (segment?.text || "").trim().length > 0
+    );
+    const normalizedText = fullText || segments.map((segment) => segment.text.trim()).join(" ").trim();
 
-      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-      console.log(`⏱️  [LOCAL TRANSCRIPTION] Whisper completed in ${elapsed}s`);
-
-      const fullText = result.text || "";
-      const segments = (result.segments || []).map((seg) => ({
-        start: seg.start,
-        end: seg.end,
-        text: seg.text?.trim() || "",
-      }));
-
-      console.log(`📝 [LOCAL TRANSCRIPTION] Full transcript length: ${fullText.length} chars`);
-      console.log(`🔢 [LOCAL TRANSCRIPTION] Segments extracted: ${segments.length}`);
-      if (fullText.length > 0) {
-        console.log(`📝 [LOCAL TRANSCRIPTION] Preview: "${fullText.substring(0, 150)}${fullText.length > 150 ? '...' : ''}"`);
-      } else {
-        console.log(`⚠️  [LOCAL TRANSCRIPTION] Transcript is empty (silent audio or unrecognizable speech)`);
-      }
-
-      recording.transcript = fullText;
-      recording.transcript_segments = segments;
-      recording.transcription_status = "completed";
-      await recording.save();
-
-      console.log(`✅ [LOCAL TRANSCRIPTION] Completed and saved for recording ${recordingId}`);
-    } finally {
-      try {
-        fs.unlinkSync(tmpFile);
-        console.log(`🧹 [LOCAL TRANSCRIPTION] Temp file cleaned up`);
-      } catch {
-        // ignore cleanup errors
-      }
+    console.log(`⏱️  [TRANSCRIPTION] ${result.provider} completed in ${elapsed}s`);
+    console.log(`📝 [TRANSCRIPTION] Transcript length: ${normalizedText.length} chars, ${segments.length} utterances`);
+    if (normalizedText.length > 0) {
+      console.log(`📝 [TRANSCRIPTION] Preview: "${normalizedText.substring(0, 150)}${normalizedText.length > 150 ? "..." : ""}"`);
+    } else {
+      throw new Error("Transcript is empty (silent audio or unrecognizable speech)");
     }
+
+    const latestBeforeSave = await MeetingRecording.findById(recordingId);
+    if (!latestBeforeSave) {
+      console.log(`⚠️  [TRANSCRIPTION] Recording ${recordingId} disappeared before save`);
+      return;
+    }
+
+    if (latestBeforeSave.transcription_status === "cancelled") {
+      console.log(`⏹️  [TRANSCRIPTION] Recording ${recordingId} was cancelled while processing; skipping completion update`);
+      return;
+    }
+
+    latestBeforeSave.transcript = normalizedText;
+    latestBeforeSave.transcript_segments = segments;
+    latestBeforeSave.transcription_status = "completed";
+    latestBeforeSave.transcription_error = null;
+    await latestBeforeSave.save();
+
+    console.log(`✅ [TRANSCRIPTION] ${result.provider} transcript completed and saved for recording ${recordingId}`);
   } catch (error) {
-    console.error(`❌ [LOCAL TRANSCRIPTION] Failed for recording ${recordingId}:`, error.message);
-    recording.transcription_status = "failed";
-    await recording.save();
-    console.log(`⚠️  [LOCAL TRANSCRIPTION] Status set to 'failed'`);
+    console.error(`❌ [TRANSCRIPTION] Failed for recording ${recordingId}:`, error.message);
+    if (/auth|token|unauthorized|401/i.test(error.message || "")) {
+      console.error("❌ [TRANSCRIPTION] AssemblyAI authentication failed. Verify ASSEMBLYAI_API_KEY and restart the backend process.");
+    }
+    const latestOnError = await MeetingRecording.findById(recordingId);
+    if (!latestOnError) {
+      console.log(`⚠️  [TRANSCRIPTION] Recording ${recordingId} not found while saving error state`);
+      return;
+    }
+
+    if (latestOnError.transcription_status === "cancelled") {
+      console.log(`⏹️  [TRANSCRIPTION] Recording ${recordingId} cancelled during processing; preserving cancelled state`);
+      return;
+    }
+
+    latestOnError.transcription_status = "failed";
+    latestOnError.transcription_error = (error.message || "Transcription failed").slice(0, 500);
+    await latestOnError.save();
+    console.log(`⚠️  [TRANSCRIPTION] Status set to 'failed'`);
   }
 }
-
 /**
  * POST /api/meetings/:id/recordings/:recordingId/generate-notes
  * Generate meeting notes from the transcript of a specific recording using GPT-4o.
@@ -495,16 +516,18 @@ ${recording.transcript}`,
 
 /**
  * POST /api/meetings/:id/recordings/:recordingId/retry-transcription
- * Retry/start transcription for a recording (re-downloads from Cloudinary).
- * Query param: ?mode=local (use local Whisper) or ?mode=online (use OpenAI API). Default: local.
+ * Retry/restart transcription for a recording via the selected transcription provider.
  */
 export const retryTranscription = async (req, res) => {
   try {
     const { id: meetingId, recordingId } = req.params;
     const userId = String(req.userId);
-    const mode = req.query.mode === "online" ? "online" : "local";
+    const transcriptionMode = normalizeTranscriptionMode(req.query.mode || req.body?.mode || "assemblyai");
+    const forceRetry =
+      String(req.query.force || req.body?.force || "false").trim().toLowerCase() === "true";
+    const providerLabel = transcriptionMode === "local" ? "Local Whisper" : "AssemblyAI";
 
-    console.log(`\n🔄 [RETRY TRANSCRIPTION] Requested for recording ${recordingId} (meeting: ${meetingId}) [mode: ${mode}]`);
+    console.log(`\n🔄 [RETRY TRANSCRIPTION] Requested for recording ${recordingId} (meeting: ${meetingId}, mode: ${transcriptionMode})`);
 
     const meeting = await Meeting.findById(meetingId).lean();
     if (!meeting) {
@@ -524,58 +547,254 @@ export const retryTranscription = async (req, res) => {
       return res.status(404).json({ error: "Recording not found" });
     }
 
-    if (recording.transcription_status === "processing") {
+    if (recording.transcription_status === "processing" && !forceRetry) {
       console.log(`⚠️  [RETRY TRANSCRIPTION] Already processing, skipping`);
       return res.status(400).json({ error: "Transcription is already in progress" });
     }
 
-    // Validate local Whisper availability if local mode
-    if (mode === "local") {
-      if (!fs.existsSync(WHISPER_PYTHON)) {
-        console.log(`❌ [RETRY TRANSCRIPTION] Local Whisper Python not found: ${WHISPER_PYTHON}`);
-        return res.status(400).json({
-          error: "Local Whisper is not configured. Python binary not found at: " + WHISPER_PYTHON,
-          hint: "Set WHISPER_PYTHON_PATH environment variable or use mode=online",
-        });
-      }
-      if (!fs.existsSync(WHISPER_SCRIPT)) {
-        console.log(`❌ [RETRY TRANSCRIPTION] Whisper script not found: ${WHISPER_SCRIPT}`);
-        return res.status(400).json({
-          error: "Local Whisper transcription script not found",
-        });
-      }
-    }
-
-    console.log(`🔄 [RETRY TRANSCRIPTION] Downloading recording from Cloudinary...`);
-
-    // Download the recording from Cloudinary and re-transcribe
-    recording.transcription_status = "processing";
+    recording.transcription_status = "pending";
+    recording.transcription_error = null;
     await recording.save();
 
-    // Fetch the file from Cloudinary
-    const response = await fetch(recording.cloudinary_url);
-    if (!response.ok) {
-      console.log(`❌ [RETRY TRANSCRIPTION] Failed to download from Cloudinary (status: ${response.status})`);
-      recording.transcription_status = "failed";
-      await recording.save();
-      return res.status(500).json({ error: "Failed to download recording from storage" });
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    console.log(`✅ [RETRY TRANSCRIPTION] Downloaded ${(buffer.length / 1024 / 1024).toFixed(2)} MB from Cloudinary`);
-    console.log(`🎙️  [RETRY TRANSCRIPTION] Kicking off ${mode} transcription...`);
-
-    // Kick off transcription in background
-    const transcribeFn = mode === "local" ? transcribeRecordingLocal : transcribeRecording;
-    transcribeFn(recording._id, buffer).catch((err) => {
-      console.error(`❌ [RETRY TRANSCRIPTION] ${mode} error:`, err.message);
+    console.log(`🎙️  [RETRY TRANSCRIPTION] Kicking off ${providerLabel} transcription...`);
+    transcribeRecording(recording._id, transcriptionMode).catch((err) => {
+      console.error(`❌ [RETRY TRANSCRIPTION] error:`, err.message);
     });
 
-    return res.json({ message: `Transcription started (${mode})`, transcription_status: "processing", mode });
+    return res.json({ message: `${providerLabel} transcription started`, transcription_status: "processing", mode: transcriptionMode });
   } catch (error) {
     console.error("❌ [RETRY TRANSCRIPTION] Error:", error.message);
     return res.status(500).json({ error: "Failed to retry transcription" });
+  }
+};
+
+/**
+ * POST /api/meetings/:id/recordings/:recordingId/stop-transcription
+ * Stop/cancel an in-progress transcription job.
+ */
+export const stopTranscription = async (req, res) => {
+  try {
+    const { id: meetingId, recordingId } = req.params;
+    const userId = String(req.userId);
+
+    const meeting = await Meeting.findById(meetingId).lean();
+    if (!meeting) {
+      return res.status(404).json({ error: "Meeting not found" });
+    }
+
+    const isHost = String(meeting.host_id) === userId;
+    const isAdminUser = req.user?.user_type === "admin";
+    if (!isHost && !isAdminUser) {
+      return res.status(403).json({ error: "Only the host or admin can stop transcription" });
+    }
+
+    const recording = await MeetingRecording.findOne({
+      _id: recordingId,
+      meeting_id: meetingId,
+    });
+
+    if (!recording) {
+      return res.status(404).json({ error: "Recording not found" });
+    }
+
+    if (!["pending", "processing"].includes(recording.transcription_status)) {
+      return res.json({
+        message: "Transcription is not running",
+        transcription_status: recording.transcription_status,
+      });
+    }
+
+    recording.transcription_status = "cancelled";
+    recording.transcription_error = "Stopped by user";
+    await recording.save();
+
+    return res.json({
+      message: "Transcription stopped",
+      transcription_status: "cancelled",
+    });
+  } catch (error) {
+    console.error("❌ [STOP TRANSCRIPTION] Error:", error.message);
+    return res.status(500).json({ error: "Failed to stop transcription" });
+  }
+};
+
+async function executeStaleTranscriptionCleanup({ staleMinutes = 30, dryRun = false } = {}) {
+  const normalizedStaleMinutes = Number.isFinite(Number(staleMinutes))
+    ? Math.min(1440, Math.max(5, Math.floor(Number(staleMinutes))))
+    : 30;
+
+  const cutoff = new Date(Date.now() - normalizedStaleMinutes * 60 * 1000);
+  const filter = {
+    transcription_status: { $in: ["pending", "processing"] },
+    updatedAt: { $lt: cutoff },
+  };
+
+  const staleRecords = await MeetingRecording.find(filter)
+    .select("_id meeting_id transcription_status updatedAt participant_name")
+    .sort({ updatedAt: 1 })
+    .lean();
+
+  if (dryRun) {
+    return {
+      dryRun: true,
+      staleMinutes: normalizedStaleMinutes,
+      cutoff,
+      count: staleRecords.length,
+      records: staleRecords,
+    };
+  }
+
+  if (staleRecords.length === 0) {
+    return {
+      dryRun: false,
+      staleMinutes: normalizedStaleMinutes,
+      cutoff,
+      matched: 0,
+      modified: 0,
+      message: "No stale transcription jobs found.",
+      records: [],
+    };
+  }
+
+  const staleIds = staleRecords.map((r) => r._id);
+  const result = await MeetingRecording.updateMany(
+    { _id: { $in: staleIds } },
+    {
+      $set: {
+        transcription_status: "failed",
+        transcription_error: `Marked failed by cleanup after ${normalizedStaleMinutes} minutes without completion.`,
+      },
+    }
+  );
+
+  return {
+    dryRun: false,
+    staleMinutes: normalizedStaleMinutes,
+    cutoff,
+    matched: result.matchedCount,
+    modified: result.modifiedCount,
+    records: staleRecords,
+  };
+}
+
+export const runStaleTranscriptionCleanupJob = async (options = {}) => {
+  const staleMinutes = options?.staleMinutes ?? 30;
+  const result = await executeStaleTranscriptionCleanup({ staleMinutes, dryRun: false });
+
+  if (result.modified > 0) {
+    console.log(
+      `🧹 [TRANSCRIPTION CLEANUP JOB] Marked ${result.modified} stale transcription job(s) as failed (window: ${result.staleMinutes}m)`
+    );
+  } else {
+    console.log(
+      `🧹 [TRANSCRIPTION CLEANUP JOB] No stale transcription jobs found (window: ${result.staleMinutes}m)`
+    );
+  }
+
+  return result;
+};
+
+/**
+ * POST /api/meetings/recordings/cleanup-stale
+ * Admin-only utility to mark stale pending/processing transcriptions as failed.
+ * Query/body options:
+ * - staleMinutes (number, default 30, min 5, max 1440)
+ * - dryRun (boolean, default false)
+ */
+export const cleanupStaleTranscriptions = async (req, res) => {
+  try {
+    const staleMinutes = Number(req.query.staleMinutes || req.body?.staleMinutes || 30);
+    const dryRunRaw = String(req.query.dryRun ?? req.body?.dryRun ?? "false").trim().toLowerCase();
+    const dryRun = dryRunRaw === "true" || dryRunRaw === "1";
+    const result = await executeStaleTranscriptionCleanup({ staleMinutes, dryRun });
+    return res.json(result);
+  } catch (error) {
+    console.error("❌ [CLEANUP STALE TRANSCRIPTIONS] Error:", error.message);
+    return res.status(500).json({ error: "Failed to cleanup stale transcriptions" });
+  }
+};
+
+/**
+ * POST /api/meetings/recordings/retry-failed
+ * Admin-only batch retry for failed transcription jobs.
+ * Query/body options:
+ * - mode: "assemblyai" | "local" (default: assemblyai)
+ * - limit: number (default 25, min 1, max 200)
+ * - onlyCleanupFailed: boolean (default false) -> retry only records failed by stale-cleanup
+ */
+export const retryFailedTranscriptionsBatch = async (req, res) => {
+  try {
+    const transcriptionMode = normalizeTranscriptionMode(
+      req.query.mode || req.body?.mode || "assemblyai"
+    );
+    const limitRaw = Number(req.query.limit || req.body?.limit || 25);
+    const limit = Number.isFinite(limitRaw)
+      ? Math.min(200, Math.max(1, Math.floor(limitRaw)))
+      : 25;
+
+    const onlyCleanupFailedRaw = String(
+      req.query.onlyCleanupFailed ?? req.body?.onlyCleanupFailed ?? "false"
+    )
+      .trim()
+      .toLowerCase();
+    const onlyCleanupFailed =
+      onlyCleanupFailedRaw === "true" || onlyCleanupFailedRaw === "1";
+
+    const filter = {
+      transcription_status: "failed",
+    };
+
+    if (onlyCleanupFailed) {
+      filter.transcription_error = /Marked failed by cleanup/i;
+    }
+
+    const failedRecords = await MeetingRecording.find(filter)
+      .sort({ updatedAt: 1 })
+      .limit(limit)
+      .select("_id")
+      .lean();
+
+    if (failedRecords.length === 0) {
+      return res.json({
+        mode: transcriptionMode,
+        queued: 0,
+        limit,
+        onlyCleanupFailed,
+        message: "No failed transcription records found for retry.",
+      });
+    }
+
+    const ids = failedRecords.map((r) => r._id);
+    const updateResult = await MeetingRecording.updateMany(
+      { _id: { $in: ids } },
+      {
+        $set: {
+          transcription_status: "pending",
+          transcription_error: null,
+        },
+      }
+    );
+
+    ids.forEach((id) => {
+      setImmediate(() => {
+        transcribeRecording(id, transcriptionMode).catch((err) => {
+          console.error("❌ [BATCH RETRY TRANSCRIPTION] Error:", err.message);
+        });
+      });
+    });
+
+    return res.json({
+      mode: transcriptionMode,
+      queued: ids.length,
+      matched: updateResult.matchedCount,
+      modified: updateResult.modifiedCount,
+      limit,
+      onlyCleanupFailed,
+      recordingIds: ids,
+    });
+  } catch (error) {
+    console.error("❌ [BATCH RETRY TRANSCRIPTION] Error:", error.message);
+    return res.status(500).json({ error: "Failed to queue batch transcription retry" });
   }
 };
 

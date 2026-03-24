@@ -100,8 +100,14 @@ const FileUploadModal = ({ show, onClose, selectedChat, onFileSent }) => {
     setUploading(true);
 
     try {
+      // Determine endpoint based on chat type
+      const isGroupChat = selectedChat?.channel_type === "group";
+      const endpoint = isGroupChat
+        ? `${BACKEND_URL}/chat/channels/${selectedChat._id}/messages/upload`
+        : `${BACKEND_URL}/direct_chat/channels/${selectedChat._id}/messages/upload`;
+
       const response = await axios.post(
-        `${BACKEND_URL}/direct_chat/channels/${selectedChat._id}/messages/upload`,
+        endpoint,
         formData,
         {
           headers: {

@@ -127,7 +127,7 @@ const InviteParticipantModal = ({
         {/* Search Box */}
         <div className="px-6 py-4 border-b border-zinc-700">
           <div className="relative">
-            <Search className="absolute left-3 top-3 w-4 h-4 text-zinc-500" />
+            <Search className="absolute left-3 inset-y-0 my-auto w-4 h-4 text-zinc-500" />
             <input
               type="text"
               placeholder="Search by name or email..."

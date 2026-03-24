@@ -721,7 +721,7 @@ export default function EmployeeManagement() {
             <CardContent className="p-4">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -tranzinc-y-1/2 size-4 text-muted-foreground" />
+                  <Search className="absolute left-3 inset-y-0 my-auto size-4 text-muted-foreground" />
                   <Input
                     placeholder="Search by name or email..."
                     value={searchTerm}

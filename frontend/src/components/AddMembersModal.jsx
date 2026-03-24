@@ -40,7 +40,7 @@ const AddMembersModal = ({
           </div>
 
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -tranzinc-y-1/2 w-4 h-4 text-zinc-500" />
+            <Search className="absolute left-3 inset-y-0 my-auto w-4 h-4 text-zinc-500" />
             <input value={searchQuery} onChange={handleSearchInput} placeholder="Search users to add..." className="w-full pl-9 pr-3 py-2 bg-zinc-800 border border-zinc-700/50 rounded-lg text-sm text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 placeholder:text-zinc-500" />
           </div>
 

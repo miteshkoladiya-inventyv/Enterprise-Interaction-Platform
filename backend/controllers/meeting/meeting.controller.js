@@ -1,11 +1,17 @@
 import Meeting from "../../models/Meeting.js";
 import { scheduleRemindersForMeeting, clearRemindersForMeeting } from "../../services/meetingReminderService.js";
 import { broadcastMeetingEvent } from "../../socket/socketServer.js";
+import { createLiveKitToken } from "../../services/livekit.service.js";
+import { getLiveKitCloudDiagnostics } from "../../services/livekit.service.js";
+import { validateLiveKitCloudCredentials } from "../../services/livekit.service.js";
 import {
   applyMeetingCountryPolicies,
   buildMeetingCollaborationContext,
   convertScheduledLocalToUtc,
 } from "../../utils/crossCountryCollaboration.js";
+import { sendSuccess, sendError, sendCreated, sendForbidden, sendBadRequest, sendServerError } from "../../utils/responseFormatter.js";
+import { checkMeetingAccess, verifyMeetingAccess } from "../../middlewares/auth.js";
+import { validateMeetingTitle } from "../../utils/validation.js";
 
 function generateMeetingCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -48,7 +54,7 @@ export const createMeeting = async (req, res) => {
 
     // Customers cannot create meetings
     if (req.user && req.user.user_type === "customer") {
-      return res.status(403).json({ error: "Customers cannot schedule meetings" });
+      return sendForbidden(res, "Customers cannot schedule meetings");
     }
 
     const {
@@ -70,8 +76,16 @@ export const createMeeting = async (req, res) => {
       regional_compliance_ack = false,
     } = req.body;
 
+    // ✅ Validate title
     if (!title || !meeting_type) {
-      return res.status(400).json({ error: "title and meeting_type are required" });
+      return sendBadRequest(res, "title and meeting_type are required");
+    }
+
+    let validatedTitle;
+    try {
+      validatedTitle = validateMeetingTitle(title);
+    } catch (validationError) {
+      return sendBadRequest(res, validationError.message);
     }
 
     const effectiveTimeZone = scheduled_timezone || req.user?.timezone || "UTC";
@@ -91,7 +105,7 @@ export const createMeeting = async (req, res) => {
 
     const meeting = new Meeting({
       meeting_code: meetingCode,
-      title,
+      title: validatedTitle,
       description,
       host_id: userId,
       meeting_type,
@@ -120,18 +134,90 @@ export const createMeeting = async (req, res) => {
     const populated = await populateMeetingResponse(meeting._id);
     broadcastMeetingEvent("created", populated);
 
-    return res.status(201).json({
-      data: populated,
-      policy_warnings: policyDecision.policy_warnings,
-      policy_flags: policyDecision.policy_flags,
-    });
+    return sendCreated(res, {
+      ...populated,
+      _policy_warnings: policyDecision.policy_warnings,
+      _policy_flags: policyDecision.policy_flags,
+    }, "Meeting created successfully");
   } catch (error) {
     // Handle unique index error gracefully
     if (error.code === 11000 && error.keyPattern?.meeting_code) {
-      return res.status(409).json({ error: "Failed to generate unique meeting code. Please try again." });
+      return sendError(res, "Failed to generate unique meeting code. Please try again.", 409);
     }
-    console.error("[MEETING] createMeeting error:", error);
-    return res.status(500).json({ error: "Failed to create meeting" });
+    console.error("[MEETING] createMeeting error:", error.message);
+    return sendServerError(res, error);
+  }
+};
+
+export const getMeetingLiveKitToken = async (req, res) => {
+  try {
+    const { id: meetingId } = req.params;
+    const userId = String(req.userId);
+
+    const meeting = await Meeting.findById(meetingId).lean();
+    if (!meeting) {
+      return sendError(res, "Meeting not found", 404);
+    }
+
+    // ✅ Use helper function instead of inline code
+    const access = checkMeetingAccess(meeting, userId);
+    if (!access.hasAccess) {
+      return sendForbidden(res, "You are not allowed to join this meeting");
+    }
+
+    const roomName = `meeting-${String(meeting._id)}`;
+    const identity = userId;
+    const name = `${req.user?.first_name || ""} ${req.user?.last_name || ""}`.trim() || req.user?.email || `User ${userId}`;
+
+    const tokenResponse = await createLiveKitToken({
+      identity,
+      name,
+      roomName,
+      metadata: {
+        meetingId: String(meeting._id),
+        userId,
+        role: access.isHost ? "host" : "participant",
+      },
+    });
+
+    return sendSuccess(res, {
+      roomName,
+      ...tokenResponse,
+    });
+  } catch (error) {
+    console.error("[MEETING] getMeetingLiveKitToken error:", error.message);
+    return sendServerError(res, error);
+  }
+};
+
+export const getLiveKitDiagnostics = async (req, res) => {
+  try {
+    const diagnostics = getLiveKitCloudDiagnostics();
+
+    const healthToken = await createLiveKitToken({
+      identity: `diag-${Date.now()}`,
+      name: "livekit-diagnostics",
+      roomName: "diagnostics-room",
+      metadata: { type: "diagnostics" },
+    });
+
+    await validateLiveKitCloudCredentials();
+
+    return res.json({
+      ok: true,
+      diagnostics,
+      tokenGeneration: {
+        ok: Boolean(healthToken?.token),
+      },
+      credentialValidation: {
+        ok: true,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error.message || "LiveKit diagnostics failed",
+    });
   }
 };
 
@@ -140,38 +226,9 @@ export const getMyMeetings = async (req, res) => {
     const userId = String(req.userId);
     const { from, to, status } = req.query;
 
-    // Auto-cancel scheduled meetings if 5 minutes have passed after the scheduled time
-    // and the host hasn't started them yet
-    const now = new Date();
-    const fiveMinutesMs = 5 * 60 * 1000;
-    await Meeting.updateMany(
-      {
-        status: "scheduled",
-        scheduled_at: { $ne: null },
-        $expr: {
-          $lt: [
-            { $add: ["$scheduled_at", fiveMinutesMs] },
-            now,
-          ],
-        },
-      },
-      { $set: { status: "cancelled" } }
-    );
-
-    // Auto-end active meetings that are past their scheduled time + duration
-    await Meeting.updateMany(
-      {
-        status: "active",
-        scheduled_at: { $ne: null },
-        $expr: {
-          $lt: [
-            { $add: ["$scheduled_at", { $multiply: ["$duration_minutes", 60000] }] },
-            now,
-          ],
-        },
-      },
-      { $set: { status: "ended", ended_at: now } }
-    );
+    // ✅ FIX: Removed auto-cancel/auto-end logic from API endpoint
+    // This is now handled by the background job (meetingMaintenanceJob.js)
+    // to avoid duplicate updates and race conditions
 
     const query = {
       $or: [
@@ -196,15 +253,13 @@ export const getMyMeetings = async (req, res) => {
       .populate("participants", "first_name last_name email country timezone user_type")
       .lean();
 
-    return res.json({
-      data: meetings.map((meeting) => ({
-        ...meeting,
-        cross_country_context: buildMeetingCollaborationContext(meeting),
-      })),
-    });
+    return sendSuccess(res, meetings.map((meeting) => ({
+      ...meeting,
+      cross_country_context: buildMeetingCollaborationContext(meeting),
+    })));
   } catch (error) {
-    console.error("[MEETING] getMyMeetings error:", error);
-    return res.status(500).json({ error: "Failed to fetch meetings" });
+    console.error("[MEETING] getMyMeetings error:", error.message);
+    return sendServerError(res, error);
   }
 };
 
@@ -293,22 +348,19 @@ export const getMeetingById = async (req, res) => {
     const meeting = await populateMeetingResponse(id);
 
     if (!meeting) {
-      return res.status(404).json({ error: "Meeting not found" });
+      return sendError(res, "Meeting not found", 404);
     }
 
-    const isParticipant =
-      String(meeting.host_id?._id || meeting.host_id) === userId ||
-      (Array.isArray(meeting.participants) &&
-        meeting.participants.some((p) => String(p?._id || p) === userId));
-
-    if (!isParticipant) {
-      return res.status(403).json({ error: "You are not allowed to view this meeting" });
+    // ✅ Use helper function
+    const access = checkMeetingAccess(meeting, userId);
+    if (!access.hasAccess) {
+      return sendForbidden(res, "You are not allowed to view this meeting");
     }
 
-    return res.json({ data: meeting });
+    return sendSuccess(res, meeting);
   } catch (error) {
-    console.error("[MEETING] getMeetingById error:", error);
-    return res.status(500).json({ error: "Failed to fetch meeting" });
+    console.error("[MEETING] getMeetingById error:", error.message);
+    return sendServerError(res, error);
   }
 };
 
@@ -317,18 +369,23 @@ export const updateMeeting = async (req, res) => {
     const { id } = req.params;
     const userId = String(req.userId);
 
+    // Validate meeting ID exists
+    if (!id || id === "undefined") {
+      return sendBadRequest(res, "Meeting ID is required");
+    }
+
     // Customers cannot update meetings
     if (req.user && req.user.user_type === "customer") {
-      return res.status(403).json({ error: "Customers cannot modify meetings" });
+      return sendForbidden(res, "Customers cannot modify meetings");
     }
 
     const meeting = await Meeting.findById(id);
     if (!meeting) {
-      return res.status(404).json({ error: "Meeting not found" });
+      return sendError(res, "Meeting not found", 404);
     }
 
     if (String(meeting.host_id) !== userId) {
-      return res.status(403).json({ error: "Only the host can update this meeting" });
+      return sendForbidden(res, "Only the host can update this meeting");
     }
 
     // Prevent starting a meeting before its scheduled time

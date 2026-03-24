@@ -1150,7 +1150,7 @@ export default function FileManager() {
       {/* Toolbar */}
       <div className="flex items-center gap-3 px-6 py-3 border-b border-zinc-800/40">
         <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-zinc-500 pointer-events-none" />
+          <Search className="absolute left-3 inset-y-0 my-auto size-4 text-zinc-500 pointer-events-none" />
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}

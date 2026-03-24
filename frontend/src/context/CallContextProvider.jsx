@@ -2,8 +2,8 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo } fro
 import axios from "axios";
 import { toast } from "sonner";
 import { useAuthContext } from "./AuthContextProvider";
-import { useAudioCall } from "../hooks/useAudioCall";
-import { useVideoCall } from "../hooks/useVideoCall";
+import { useAudioCallLiveKit } from "../hooks/useAudioCallLiveKit";
+import { useVideoCallLiveKit } from "../hooks/useVideoCallLiveKit";
 import IncomingCallModal from "../components/IncomingCallModal";
 import IncomingVideoCallModal from "../components/IncomingVideoCallModal";
 import OutgoingCallModal from "../components/OutgoingCallModal";
@@ -62,6 +62,18 @@ export function GlobalCallProvider({ children }) {
     [axiosConfig]
   );
 
+  const getDirectLiveKitTokenApi = useCallback(
+    async (toUserId, callType = "audio") => {
+      const { data } = await axios.post(
+        `${BACKEND_URL}/call/livekit-token`,
+        { toUserId: String(toUserId), callType },
+        axiosConfig
+      );
+      return data;
+    },
+    [axiosConfig]
+  );
+
   const inviteToCallApi = useCallback(
     async (inviteeUserId) => {
       const { data } = await axios.post(
@@ -74,18 +86,20 @@ export function GlobalCallProvider({ children }) {
     [axiosConfig]
   );
 
-  const audioCall = useAudioCall(
+  const audioCall = useAudioCallLiveKit(
     socket,
     user?.id ?? user?._id,
     currentUserName,
-    requestCallApi
+    requestCallApi,
+    getDirectLiveKitTokenApi
   );
 
-  const videoCall = useVideoCall(
+  const videoCall = useVideoCallLiveKit(
     socket,
     user?.id ?? user?._id,
     currentUserName,
-    requestVideoCallApi
+    requestVideoCallApi,
+    getDirectLiveKitTokenApi
   );
 
   useEffect(() => {

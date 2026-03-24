@@ -1,7 +1,5 @@
 import "./env.js";
 import express from "express";
-import dotenv from "dotenv";
-dotenv.config();
 import cors from "cors";
 
 import connectDB from "./config/database.js";
@@ -18,10 +16,15 @@ import departmentRoutes from "./routes/department.routes.js";
 import ticketRoutes from "./routes/ticket.routes.js";
 import roleRoutes from "./routes/role.routes.js";
 import documentRoutes from "./routes/document.routes.js";
+import notificationRoutes from "./routes/notification.routes.js";
 import { verifyEmailConfig } from "./utils/emailService.js";
-import { server, app } from "./socket/socketServer.js";
+import { server, app, io } from "./socket/socketServer.js";
 import { Message } from "./models/Message.js";
 import Meeting from "./models/Meeting.js";
+import { assertLiveKitCloudConfigured } from "./services/livekit.service.js";
+import { runStaleTranscriptionCleanupJob } from "./controllers/meeting/recording.controller.js";
+import { startMeetingMaintenanceScheduler } from "./jobs/meetingMaintenanceJob.js";
+import { initializeScheduledMessageJob } from "./services/scheduledMessage.service.js";
 
 import { verifyToken } from "./middlewares/auth.middleware.js";
 // Load environment variables
@@ -62,11 +65,25 @@ app.use(
   })
 );
 
+// Fail fast if LiveKit Cloud configuration is invalid.
+assertLiveKitCloudConfigured();
+
 // Connect to MongoDB
 connectDB();
 
 // Verify email configuration
 verifyEmailConfig();
+
+const transcriptionCleanupEnabled =
+  String(process.env.ENABLE_STALE_TRANSCRIPTION_CLEANUP ?? "true").trim().toLowerCase() !== "false";
+const transcriptionCleanupIntervalMs = Math.max(
+  60_000,
+  Number(process.env.STALE_TRANSCRIPTION_CLEANUP_INTERVAL_MS || 10 * 60 * 1000)
+);
+const transcriptionCleanupStaleMinutes = Math.max(
+  5,
+  Number(process.env.STALE_TRANSCRIPTION_CLEANUP_STALE_MINUTES || 30)
+);
 
 // Routes
 app.get("/", (req, res) => {
@@ -98,6 +115,7 @@ app.use("/api/departments", departmentRoutes);
 app.use("/api/tickets", ticketRoutes);
 app.use("/api/roles", roleRoutes);
 app.use("/api/documents", documentRoutes);
+app.use("/api/notifications", notificationRoutes);
 // Admin dashboard stats
 app.get("/api/admin/stats", verifyToken, async (req, res) => {
   try {
@@ -138,6 +156,49 @@ server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`HTTP: http://localhost:${PORT}`);
   console.log(`Socket.IO: ws://localhost:${PORT}`);
+
+  if (transcriptionCleanupEnabled) {
+    console.log(
+      `Stale transcription cleanup enabled (interval: ${Math.round(
+        transcriptionCleanupIntervalMs / 60000
+      )}m, stale threshold: ${transcriptionCleanupStaleMinutes}m)`
+    );
+
+    const runCleanup = async () => {
+      try {
+        await runStaleTranscriptionCleanupJob({
+          staleMinutes: transcriptionCleanupStaleMinutes,
+        });
+      } catch (error) {
+        console.error("❌ [TRANSCRIPTION CLEANUP JOB] Failed:", error.message);
+      }
+    };
+
+    setTimeout(() => {
+      runCleanup();
+    }, 15_000);
+
+    setInterval(() => {
+      runCleanup();
+    }, transcriptionCleanupIntervalMs);
+  } else {
+    console.log("Stale transcription cleanup disabled (ENABLE_STALE_TRANSCRIPTION_CLEANUP=false)");
+  }
+
+  // ✅ Start meeting maintenance job (auto-cancel, auto-end meetings)
+  try {
+    startMeetingMaintenanceScheduler();
+  } catch (error) {
+    console.error("❌ Failed to start meeting maintenance scheduler:", error.message);
+  }
+
+  // ✅ Start scheduled message job (send scheduled messages at their time)
+  try {
+    initializeScheduledMessageJob(io);
+  } catch (error) {
+    console.error("❌ Failed to start scheduled message job:", error.message);
+  }
+
   console.log(`=================================`);
 });
 

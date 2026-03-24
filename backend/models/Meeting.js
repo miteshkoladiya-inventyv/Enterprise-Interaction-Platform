@@ -110,11 +110,16 @@ const meetingSchema = new Schema(
   }
 );
 
-// Indexes
+// Indexes - single field indexes
 meetingSchema.index({ meeting_code: 1 });
 meetingSchema.index({ host_id: 1 });
-meetingSchema.index({ "participants": 1 });
+meetingSchema.index({ participants: 1 });
 meetingSchema.index({ status: 1 });
 meetingSchema.index({ scheduled_at: 1 });
+
+// Compound indexes for common queries
+meetingSchema.index({ status: 1, scheduled_at: 1 });
+meetingSchema.index({ host_id: 1, status: 1 });
+meetingSchema.index({ status: 1, created_at: -1 });
 
 export default model("Meeting", meetingSchema);

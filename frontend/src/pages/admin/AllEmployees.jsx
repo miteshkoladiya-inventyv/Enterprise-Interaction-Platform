@@ -80,7 +80,7 @@ const AllEmployees = () => {
       <div className="bg-zinc-900 rounded-xl border border-zinc-700/50 p-4 mb-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -tranzinc-y-1/2 h-4 w-4 text-zinc-500" />
+            <Search className="absolute left-3 inset-y-0 my-auto h-4 w-4 text-zinc-500" />
             <input
               type="text"
               placeholder="Search by name or email..."

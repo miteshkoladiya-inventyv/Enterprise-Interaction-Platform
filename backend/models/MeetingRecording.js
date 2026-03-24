@@ -51,6 +51,7 @@ const meetingRecordingSchema = new Schema(
           start: Number,
           end: Number,
           text: String,
+          speaker: { type: String, default: null },
         },
       ],
       default: [],
@@ -61,8 +62,13 @@ const meetingRecordingSchema = new Schema(
     },
     transcription_status: {
       type: String,
-      enum: ["pending", "processing", "completed", "failed"],
-      default: "pending",
+      enum: ["not_started", "pending", "processing", "completed", "failed", "cancelled"],
+      default: "not_started",
+    },
+    transcription_error: {
+      type: String,
+      default: null,
+      trim: true,
     },
   },
   { timestamps: true }

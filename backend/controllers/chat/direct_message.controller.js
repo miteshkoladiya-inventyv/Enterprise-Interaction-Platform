@@ -6,6 +6,17 @@ import { ChannelMember } from "../../models/ChannelMember.js";
 import { Message } from "../../models/Message.js";
 import { getReceiverSocketId, io } from "../../socket/socketServer.js";
 import { cloudinary } from "../../config/cloudinary.js";
+import { sendSuccess, sendError, sendCreated, sendForbidden, sendBadRequest, sendServerError, sendNotFound } from "../../utils/responseFormatter.js";
+
+// Helper function to normalize reactions from array format to grouped format
+const normalizeReactions = (reactions) => {
+  const groupedReactions = {};
+  for (const r of reactions) {
+    if (!groupedReactions[r.emoji]) groupedReactions[r.emoji] = [];
+    groupedReactions[r.emoji].push(r.user_id.toString());
+  }
+  return groupedReactions;
+};
 
 // Search users for direct chat
 export const searchUsers = async (req, res) => {
@@ -15,7 +26,7 @@ export const searchUsers = async (req, res) => {
     console.log(query);
 
     if (!query || query.trim().length === 0) {
-      return res.status(400).json({ error: "Search query is required" });
+      return sendBadRequest(res, "Search query is required");
     }
 
     // Search users by name or email
@@ -72,7 +83,7 @@ export const searchUsers = async (req, res) => {
     });
   } catch (error) {
     console.error("Search users error:", error);
-    res.status(500).json({ error: error.message });
+    return sendServerError(res, error);
   }
 };
 
@@ -87,11 +98,11 @@ export const getUserById = async (req, res) => {
     );
 
     if (!user) {
-      return res.status(404).json({ error: "User not found" });
+      return sendNotFound(res, "User not found");
     }
 
     if (user.status !== "active") {
-      return res.status(403).json({ error: "User is not active" });
+      return sendForbidden(res, "User is not active");
     }
 
     let employeeInfo = null;
@@ -129,7 +140,7 @@ export const getUserById = async (req, res) => {
     });
   } catch (error) {
     console.error("Get user by ID error:", error);
-    res.status(500).json({ error: error.message });
+    return sendServerError(res, error);
   }
 };
 
@@ -140,7 +151,7 @@ export const startDirectChat = async (req, res) => {
     const currentUserId = req.userId;
 
     if (!user_id) {
-      return res.status(400).json({ error: "user_id is required" });
+      return sendBadRequest(res, "user_id is required");
     }
 
     if (user_id === currentUserId) {
@@ -152,11 +163,11 @@ export const startDirectChat = async (req, res) => {
     // Check if target user exists and is active
     const targetUser = await User.findById(user_id);
     if (!targetUser) {
-      return res.status(404).json({ error: "User not found" });
+      return sendNotFound(res, "User not found");
     }
 
     if (targetUser.status !== "active") {
-      return res.status(403).json({ error: "User is not active" });
+      return sendForbidden(res, "User is not active");
     }
 
     // Check if direct chat already exists
@@ -245,7 +256,7 @@ export const startDirectChat = async (req, res) => {
     });
   } catch (error) {
     console.error("Start direct chat error:", error);
-    res.status(500).json({ error: error.message });
+    return sendServerError(res, error);
   }
 };
 
@@ -318,7 +329,7 @@ export const getDirectChats = async (req, res) => {
     });
   } catch (error) {
     console.error("Get direct chats error:", error);
-    res.status(500).json({ error: error.message });
+    return sendServerError(res, error);
   }
 };
 
@@ -414,7 +425,7 @@ export const getRecentContacts = async (req, res) => {
     });
   } catch (error) {
     console.error("Get recent contacts error:", error);
-    res.status(500).json({ error: error.message });
+    return sendServerError(res, error);
   }
 };
 
@@ -427,7 +438,7 @@ export const getMessages = async (req, res) => {
 
     const channel = await ChatChannel.findById(channelId);
     if (!channel) {
-      return res.status(404).json({ error: "Channel not found" });
+      return sendNotFound(res, "Channel not found");
     }
 
     const membership = await ChannelMember.findOne({
@@ -537,7 +548,7 @@ export const getMessages = async (req, res) => {
     });
   } catch (error) {
     console.error("Get messages error:", error);
-    res.status(500).json({ error: error.message });
+    return sendServerError(res, error);
   }
 };
 
@@ -549,12 +560,12 @@ export const sendMessage = async (req, res) => {
     const currentUserId = req.userId;
 
     if (!content || content.trim().length === 0) {
-      return res.status(400).json({ error: "Message content is required" });
+      return sendBadRequest(res, "Message content is required");
     }
 
     const channel = await ChatChannel.findById(channelId);
     if (!channel) {
-      return res.status(404).json({ error: "Channel not found" });
+      return sendNotFound(res, "Channel not found");
     }
 
     const membership = await ChannelMember.findOne({
@@ -576,7 +587,7 @@ export const sendMessage = async (req, res) => {
         parentMessage.channel_id.toString() !== channelId ||
         parentMessage.deleted_at
       ) {
-        return res.status(400).json({ error: "Invalid parent message" });
+        return sendBadRequest(res, "Invalid parent message");
       }
     }
 
@@ -590,6 +601,12 @@ export const sendMessage = async (req, res) => {
     });
 
     await message.save();
+
+    // ✅ NEW: Create notifications for all channel members (including direct message recipients)
+    const { notifyChannelMembers } = await import("./message.controller.js");
+    notifyChannelMembers(message._id, channelId, currentUserId, content.trim()).catch((err) =>
+      console.error("[DIRECT MESSAGE] Notification error:", err)
+    );
 
     await ChatChannel.findByIdAndUpdate(channelId, {
       last_message_at: message.created_at,
@@ -696,7 +713,7 @@ export const sendMessage = async (req, res) => {
     });
   } catch (error) {
     console.error("Send message error:", error);
-    res.status(500).json({ error: error.message });
+    return sendServerError(res, error);
   }
 };
 
@@ -709,13 +726,13 @@ export const editMessage = async (req, res) => {
 
     // Validate input
     if (!content || content.trim().length === 0) {
-      return res.status(400).json({ error: "Message content is required" });
+      return sendBadRequest(res, "Message content is required");
     }
 
     // Find message
     const message = await Message.findById(messageId);
     if (!message) {
-      return res.status(404).json({ error: "Message not found" });
+      return sendNotFound(res, "Message not found");
     }
 
     // Verify user is the sender
@@ -727,12 +744,12 @@ export const editMessage = async (req, res) => {
 
     // Check if message was deleted
     if (message.deleted_at) {
-      return res.status(400).json({ error: "Cannot edit deleted message" });
+      return sendBadRequest(res, "Cannot edit deleted message");
     }
 
     // Update message
     message.content = content.trim();
-    message.updated_at = new Date();
+    message.edited_at = new Date();
     await message.save();
 
     // Populate sender details
@@ -756,14 +773,14 @@ export const editMessage = async (req, res) => {
           user_type: populatedMessage.sender_id.user_type,
         },
         created_at: populatedMessage.created_at,
-        updated_at: populatedMessage.updated_at,
+        edited_at: populatedMessage.edited_at,
         is_edited: true,
         is_own: true,
       },
     });
   } catch (error) {
     console.error("Edit message error:", error);
-    res.status(500).json({ error: error.message });
+    return sendServerError(res, error);
   }
 };
 
@@ -776,7 +793,7 @@ export const deleteMessage = async (req, res) => {
     // Find message
     const message = await Message.findById(messageId);
     if (!message) {
-      return res.status(404).json({ error: "Message not found" });
+      return sendNotFound(res, "Message not found");
     }
 
     // Verify user is the sender
@@ -788,7 +805,7 @@ export const deleteMessage = async (req, res) => {
 
     // Check if already deleted
     if (message.deleted_at) {
-      return res.status(400).json({ error: "Message already deleted" });
+      return sendBadRequest(res, "Message already deleted");
     }
 
     // Soft delete
@@ -815,7 +832,7 @@ export const deleteMessage = async (req, res) => {
     });
   } catch (error) {
     console.error("Delete message error:", error);
-    res.status(500).json({ error: error.message });
+    return sendServerError(res, error);
   }
 };
 
@@ -828,7 +845,7 @@ export const clearConversation = async (req, res) => {
     // Verify channel exists
     const channel = await ChatChannel.findById(channelId);
     if (!channel) {
-      return res.status(404).json({ error: "Channel not found" });
+      return sendNotFound(res, "Channel not found");
     }
 
     // Verify user is a member
@@ -865,7 +882,7 @@ export const clearConversation = async (req, res) => {
     });
   } catch (error) {
     console.error("Clear conversation error:", error);
-    res.status(500).json({ error: error.message });
+    return sendServerError(res, error);
   }
 };
 
@@ -901,7 +918,7 @@ export const getUnreadCount = async (req, res) => {
     });
   } catch (error) {
     console.error("Get unread count error:", error);
-    res.status(500).json({ error: error.message });
+    return sendServerError(res, error);
   }
 };
 
@@ -914,7 +931,7 @@ export const markMessagesAsSeen = async (req, res) => {
     // Verify channel exists
     const channel = await ChatChannel.findById(channelId);
     if (!channel) {
-      return res.status(404).json({ error: "Channel not found" });
+      return sendNotFound(res, "Channel not found");
     }
 
     // Verify user is a member of the channel
@@ -1015,7 +1032,7 @@ export const getMessageSeenStatus = async (req, res) => {
       .populate("channel_id");
 
     if (!message) {
-      return res.status(404).json({ error: "Message not found" });
+      return sendNotFound(res, "Message not found");
     }
 
     // Verify user is a member
@@ -1101,7 +1118,7 @@ export const uploadFileMessage = async (req, res) => {
     const userId = req.user.id;
 
     if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
+      return sendBadRequest(res, "No file uploaded");
     }
 
     const channel = await ChatChannel.findById(channelId);
@@ -1109,7 +1126,7 @@ export const uploadFileMessage = async (req, res) => {
       if (req.file.filename) {
         await cloudinary.uploader.destroy(req.file.filename);
       }
-      return res.status(404).json({ error: "Channel not found" });
+      return sendNotFound(res, "Channel not found");
     }
 
     const membershipExists = await ChannelMember.findOne({
@@ -1224,7 +1241,7 @@ export const deleteFileMessage = async (req, res) => {
 
     const message = await Message.findById(messageId);
     if (!message) {
-      return res.status(404).json({ error: "Message not found" });
+      return sendNotFound(res, "Message not found");
     }
 
     // Check if user is the sender
@@ -1277,12 +1294,12 @@ export const toggleReaction = async (req, res) => {
     const currentUserId = req.userId;
 
     if (!emoji || !ALLOWED_EMOJIS.includes(emoji)) {
-      return res.status(400).json({ error: "Invalid emoji" });
+      return sendBadRequest(res, "Invalid emoji");
     }
 
     const message = await Message.findById(messageId);
     if (!message || message.deleted_at) {
-      return res.status(404).json({ error: "Message not found" });
+      return sendNotFound(res, "Message not found");
     }
 
     // Verify user is member of the channel
@@ -1291,7 +1308,7 @@ export const toggleReaction = async (req, res) => {
       user_id: currentUserId,
     });
     if (!membership) {
-      return res.status(403).json({ error: "You are not a member of this channel" });
+      return sendForbidden(res, "You are not a member of this channel");
     }
 
     // Check if user already reacted with this emoji
@@ -1344,7 +1361,7 @@ export const toggleReaction = async (req, res) => {
     res.json({ success: true, action, reactions: groupedReactions });
   } catch (error) {
     console.error("Toggle reaction error:", error);
-    res.status(500).json({ error: error.message });
+    return sendServerError(res, error);
   }
 };
 
@@ -1358,12 +1375,12 @@ export const saveCallLog = async (req, res) => {
     const currentUserId = req.userId;
 
     if (!call_type || !status) {
-      return res.status(400).json({ error: "call_type and status are required" });
+      return sendBadRequest(res, "call_type and status are required");
     }
 
     const channel = await ChatChannel.findById(channelId);
     if (!channel) {
-      return res.status(404).json({ error: "Channel not found" });
+      return sendNotFound(res, "Channel not found");
     }
 
     const membership = await ChannelMember.findOne({
@@ -1371,7 +1388,7 @@ export const saveCallLog = async (req, res) => {
       user_id: currentUserId,
     });
     if (!membership) {
-      return res.status(403).json({ error: "You are not a member of this channel" });
+      return sendForbidden(res, "You are not a member of this channel");
     }
 
     // Build content string based on call status
@@ -1443,7 +1460,7 @@ export const saveCallLog = async (req, res) => {
     res.status(201).json({ success: true, data: { ...messageData, is_own: true } });
   } catch (error) {
     console.error("Save call log error:", error);
-    res.status(500).json({ error: error.message });
+    return sendServerError(res, error);
   }
 };
 

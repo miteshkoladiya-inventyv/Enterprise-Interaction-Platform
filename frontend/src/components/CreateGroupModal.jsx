@@ -43,7 +43,7 @@ const CreateGroupModal = ({
               className="w-full px-3 py-2 border border-zinc-600 rounded-lg text-sm bg-zinc-800 text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 placeholder:text-zinc-500"
             />
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -tranzinc-y-1/2 w-4 h-4 text-zinc-500" />
+              <Search className="absolute left-3 inset-y-0 my-auto w-4 h-4 text-zinc-500" />
               <input
                 value={searchQuery}
                 onChange={handleSearchInput}

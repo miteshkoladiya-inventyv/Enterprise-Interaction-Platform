@@ -48,7 +48,6 @@ import {
   ChevronDown,
   ChevronUp,
   Cpu,
-  Cloud,
   Bot,
 } from "lucide-react";
 import axios from "axios";
@@ -231,6 +230,7 @@ const MeetingRoom = ({
   chatContainerRef,
   copyMeetingLink,
   handleLeaveMeeting,
+  socket,
   onUploadRecordings,
   lobbyRequests = [],
   onAdmitToLobby,
@@ -241,6 +241,19 @@ const MeetingRoom = ({
   const [pinnedUserId, setPinnedUserId] = useState(null);
   const [lobbyBoxOpen, setLobbyBoxOpen] = useState(false);
   const [uploadingRecordings, setUploadingRecordings] = useState(false);
+
+  const formatRecordingDuration = (seconds = 0) => {
+    const total = Math.max(0, Number(seconds) || 0);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+
+    if (h > 0) {
+      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    }
+
+    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  };
   const containerRef = useRef(null);
 
   const handleRecordingToggle = async () => {
@@ -251,6 +264,12 @@ const MeetingRoom = ({
 
     if (meetingCall.isRecording) {
       const segments = await meetingCall.stopRecording();
+      if (socket?.connected) {
+        socket.emit("meeting-recording-state", {
+          meetingId: activeMeeting._id,
+          isRecording: false,
+        });
+      }
       if (segments.length > 0 && onUploadRecordings) {
         setUploadingRecordings(true);
         try {
@@ -263,7 +282,16 @@ const MeetingRoom = ({
         }
       }
     } else {
-      meetingCall.startRecording(roomParticipants);
+      const started = meetingCall.startRecording(roomParticipants);
+      if (started && socket?.connected) {
+        socket.emit("meeting-recording-state", {
+          meetingId: activeMeeting._id,
+          isRecording: true,
+          startedAt: new Date().toISOString(),
+          startedByName: currentUserName,
+          startedByUserId: currentUserId,
+        });
+      }
     }
   };
 
@@ -648,6 +676,14 @@ const MeetingRoom = ({
       </div>
 
       {/* ---- Main content area ---- */}
+      {meetingCall.remoteRecordingState?.isRecording && (
+        <div className="px-4 py-2 border-b border-red-500/20 bg-red-500/10 text-red-200 text-xs flex items-center justify-between">
+          <span>
+            Recording in progress by {meetingCall.remoteRecordingState.startedByName || "Host"}
+          </span>
+          <span className="font-mono text-red-300">LIVE</span>
+        </div>
+      )}
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Video area */}
         <div className="flex-1 flex flex-col min-h-0 min-w-0">
@@ -729,7 +765,7 @@ const MeetingRoom = ({
                 type="button"
                 onClick={meetingCall.toggleScreenShare}
                 title={
-                  meetingCall.isScreenSharing ? "Stop sharing" : "Share screen"
+                  meetingCall.isScreenSharing ? "Stop sharing (S)" : "Share screen (S)"
                 }
                 className={`p-3 rounded-full transition-colors ${
                   meetingCall.isScreenSharing
@@ -760,33 +796,41 @@ const MeetingRoom = ({
 
               {/* Recording (host only) */}
               {activeMeeting.isHost && (
-                <button
-                  type="button"
-                  onClick={handleRecordingToggle}
-                  disabled={uploadingRecordings || !activeMeeting.recording_enabled}
-                  title={
-                    !activeMeeting.recording_enabled
-                      ? "Recording disabled by regional policy"
-                      : meetingCall.isRecording
-                      ? "Stop recording"
-                      : "Start recording (saves to cloud)"
-                  }
-                  className={`p-3 rounded-full transition-colors ${
-                    !activeMeeting.recording_enabled
-                      ? "bg-zinc-800/60 text-zinc-500"
-                      : meetingCall.isRecording
-                      ? "bg-red-500/30 text-red-400 hover:bg-red-500/40"
-                      : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                  } ${uploadingRecordings ? "opacity-50 pointer-events-none" : ""}`}
-                >
-                  {uploadingRecordings ? (
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                  ) : (
-                    <Circle
-                      className={`w-5 h-5 ${meetingCall.isRecording ? "fill-current" : ""}`}
-                    />
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleRecordingToggle}
+                    disabled={uploadingRecordings || !activeMeeting.recording_enabled}
+                    title={
+                      !activeMeeting.recording_enabled
+                        ? "Recording disabled by regional policy"
+                        : meetingCall.isRecording
+                        ? "Stop recording"
+                        : "Start recording (saves to cloud)"
+                    }
+                    className={`p-3 rounded-full transition-colors ${
+                      !activeMeeting.recording_enabled
+                        ? "bg-zinc-800/60 text-zinc-500"
+                        : meetingCall.isRecording
+                        ? "bg-red-500/30 text-red-400 hover:bg-red-500/40"
+                        : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                    } ${uploadingRecordings ? "opacity-50 pointer-events-none" : ""}`}
+                  >
+                    {uploadingRecordings ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <Circle
+                        className={`w-5 h-5 ${meetingCall.isRecording ? "fill-current" : ""}`}
+                      />
+                    )}
+                  </button>
+
+                  {meetingCall.isRecording && (
+                    <span className="px-2 py-1 rounded-md bg-red-500/10 border border-red-500/30 text-red-300 text-xs font-mono">
+                      REC {formatRecordingDuration(meetingCall.recordingElapsedSeconds)}
+                    </span>
                   )}
-                </button>
+                </div>
               )}
 
               <div className="w-px h-8 bg-zinc-700 mx-1" />
@@ -1022,11 +1066,13 @@ const RecordingPlaybackModal = ({
   loadingRecordingsId,
   recordingsByMeeting,
   axiosConfig,
+  isAdminUser = false,
 }) => {
   const [selectedRecording, setSelectedRecording] = useState(null);
   const [activeTab, setActiveTab] = useState("recording"); // "recording" | "transcript" | "notes" | "chat"
   const [generatingNotes, setGeneratingNotes] = useState(null);
   const [retryingTranscription, setRetryingTranscription] = useState(null);
+  const [stoppingTranscription, setStoppingTranscription] = useState(null);
   const [notesMap, setNotesMap] = useState({}); // recordingId -> { meeting_notes, transcript, transcript_segments }
   const [currentCaption, setCurrentCaption] = useState("");
   const [showCaptions, setShowCaptions] = useState(true);
@@ -1034,6 +1080,8 @@ const RecordingPlaybackModal = ({
   const [chatMessages, setChatMessages] = useState([]); // [{ role: "user"|"assistant", content: string }]
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [cleanupPreviewCount, setCleanupPreviewCount] = useState(null);
   const videoRef = useRef(null);
   const transcriptRef = useRef(null);
   const chatEndRef = useRef(null);
@@ -1044,6 +1092,7 @@ const RecordingPlaybackModal = ({
   const currentRec = selectedRecording
     ? recordings.find((r) => r._id === selectedRecording._id) || selectedRecording
     : recordings[0];
+
 
   // Poll for transcription status updates every 5 seconds while any recording is pending/processing
   useEffect(() => {
@@ -1151,15 +1200,16 @@ const RecordingPlaybackModal = ({
     }
   };
 
-  const handleRetryTranscription = async (rec, mode = "local") => {
+  const handleRetryTranscription = async (rec, mode = "assemblyai", force = false) => {
     setRetryingTranscription({ id: rec._id, mode });
+    const providerLabel = mode === "local" ? "Local Whisper" : "AssemblyAI";
     try {
       await axios.post(
-        `${BACKEND_URL}/meetings/${recordingModal.meetingId}/recordings/${rec._id}/retry-transcription?mode=${mode}`,
+        `${BACKEND_URL}/meetings/${recordingModal.meetingId}/recordings/${rec._id}/retry-transcription?mode=${mode}${force ? "&force=true" : ""}`,
         {},
         axiosConfig
       );
-      toast.success(`Transcription started (${mode === "local" ? "Local Whisper" : "OpenAI Cloud"}). This may take a minute.`);
+      toast.success(`Transcription started (${providerLabel}). This may take a minute.`);
       // Immediately re-fetch recordings so polling picks up the "processing" status
       try {
         const { data } = await axios.get(
@@ -1172,6 +1222,38 @@ const RecordingPlaybackModal = ({
       toast.error(err.response?.data?.error || "Failed to start transcription");
     } finally {
       setRetryingTranscription(null);
+    }
+  };
+
+  const handleStopTranscription = async (rec) => {
+    setStoppingTranscription(rec._id);
+    try {
+      const { data } = await axios.post(
+        `${BACKEND_URL}/meetings/${recordingModal.meetingId}/recordings/${rec._id}/stop-transcription`,
+        {},
+        axiosConfig
+      );
+
+      const status = data?.transcription_status;
+      if (status === "cancelled") {
+        toast.success("Transcription stopped");
+      } else {
+        toast.info("Transcription was already not running");
+      }
+
+      try {
+        const { data } = await axios.get(
+          `${BACKEND_URL}/meetings/${recordingModal.meetingId}/recordings`,
+          axiosConfig
+        );
+        setPolledRecordings(data.data || []);
+      } catch (_) {
+        // Polling will catch up
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.error || "Failed to stop transcription");
+    } finally {
+      setStoppingTranscription(null);
     }
   };
 
@@ -1240,10 +1322,58 @@ const RecordingPlaybackModal = ({
     }
   };
 
-  const transcriptionReady = currentRec?.transcription_status === "completed" && currentRec?.transcript;
-  const transcriptionFailed = currentRec?.transcription_status === "failed";
-  const transcriptionPending = currentRec?.transcription_status === "pending" || currentRec?.transcription_status === "processing";
-  const transcriptionNotStarted = !currentRec?.transcription_status;
+  const runCleanupStaleTranscriptions = async (dryRun = true) => {
+    setCleanupBusy(true);
+    try {
+      const { data } = await axios.post(
+        `${BACKEND_URL}/meetings/recordings/cleanup-stale?dryRun=${dryRun ? "true" : "false"}&staleMinutes=30`,
+        {},
+        axiosConfig
+      );
+
+      const count = dryRun ? Number(data?.count || 0) : Number(data?.modified || 0);
+      setCleanupPreviewCount(count);
+
+      if (dryRun) {
+        toast.success(`Cleanup preview: ${count} stale transcription job(s) found`);
+      } else {
+        toast.success(`Cleanup complete: ${count} stale transcription job(s) marked as failed`);
+        try {
+          const refreshed = await axios.get(
+            `${BACKEND_URL}/meetings/${recordingModal.meetingId}/recordings`,
+            axiosConfig
+          );
+          setPolledRecordings(refreshed.data?.data || []);
+        } catch {
+          // Polling will catch up if refresh fails.
+        }
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Failed to run cleanup");
+    } finally {
+      setCleanupBusy(false);
+    }
+  };
+
+  const transcriptionStatus = String(currentRec?.transcription_status || "").trim().toLowerCase();
+  const transcriptText = String(currentRec?.transcript || "").trim();
+  const transcriptionReady = transcriptionStatus === "completed" && transcriptText.length > 0;
+  const transcriptionCompletedWithoutContent =
+    transcriptionStatus === "completed" && transcriptText.length === 0;
+  const transcriptionFailed =
+    transcriptionStatus === "failed" || transcriptionCompletedWithoutContent;
+  const transcriptionCancelled = transcriptionStatus === "cancelled";
+  const transcriptionPending = transcriptionStatus === "pending" || transcriptionStatus === "processing";
+  const transcriptionStuck = (() => {
+    if (!transcriptionPending || !currentRec) return false;
+    const updatedAt = currentRec.updatedAt || currentRec.updated_at || currentRec.createdAt || currentRec.created_at;
+    if (!updatedAt) return false;
+    const ageMs = Date.now() - new Date(updatedAt).getTime();
+    return ageMs > 10 * 60 * 1000;
+  })();
+  const transcriptionNotStarted =
+    transcriptionStatus === "not_started" ||
+    !transcriptionStatus;
   const notes = notesMap[currentRec?._id];
 
   return (
@@ -1258,13 +1388,42 @@ const RecordingPlaybackModal = ({
             <h2 className="text-sm font-semibold text-white">Meeting Recordings</h2>
             <p className="text-[11px] text-zinc-400 mt-0.5">{recordingModal.meetingTitle}</p>
           </div>
-          <button
-            type="button"
-            onClick={() => setRecordingModal(null)}
-            className="p-1 rounded hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            {isAdminUser && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => runCleanupStaleTranscriptions(true)}
+                  disabled={cleanupBusy}
+                  className="px-2.5 py-1 rounded-md text-[11px] bg-zinc-800 text-zinc-300 border border-zinc-700 hover:bg-zinc-700 disabled:opacity-50"
+                  title="Preview stale transcription jobs older than 30 minutes"
+                >
+                  {cleanupBusy ? "Working..." : "Preview Stale"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => runCleanupStaleTranscriptions(false)}
+                  disabled={cleanupBusy}
+                  className="px-2.5 py-1 rounded-md text-[11px] bg-amber-500/15 text-amber-300 border border-amber-500/30 hover:bg-amber-500/25 disabled:opacity-50"
+                  title="Mark stale transcription jobs as failed"
+                >
+                  Clean Now
+                </button>
+                {cleanupPreviewCount !== null && (
+                  <span className="text-[10px] text-zinc-500">
+                    stale: {cleanupPreviewCount}
+                  </span>
+                )}
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => setRecordingModal(null)}
+              className="p-1 rounded hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Body */}
@@ -1323,12 +1482,17 @@ const RecordingPlaybackModal = ({
                         {transcriptionPending && (
                           <span className="text-[10px] text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded flex items-center gap-1">
                             <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                            Transcribing...
+                            {transcriptionStuck ? "Transcription delayed" : "Transcribing..."}
                           </span>
                         )}
                         {transcriptionFailed && (
                           <span className="text-[10px] text-red-400 bg-red-500/10 border border-red-500/20 px-1.5 py-0.5 rounded">
                             Transcription failed
+                          </span>
+                        )}
+                        {transcriptionCancelled && (
+                          <span className="text-[10px] text-zinc-300 bg-zinc-700/30 border border-zinc-600 px-1.5 py-0.5 rounded">
+                            Transcription stopped
                           </span>
                         )}
                       </div>
@@ -1413,6 +1577,8 @@ const RecordingPlaybackModal = ({
                             <div className="space-y-1">
                               {currentRec.transcript_segments?.length > 0 ? (
                                 currentRec.transcript_segments.map((seg, i) => {
+                                  // Guard: ensure segment text is a string
+                                  const segmentText = seg?.text || "";
                                   const isActive =
                                     videoRef.current &&
                                     videoRef.current.currentTime >= seg.start &&
@@ -1431,14 +1597,14 @@ const RecordingPlaybackModal = ({
                                       <span className={`text-[10px] font-mono mr-2 ${isActive ? "text-indigo-400" : "text-zinc-600 group-hover:text-zinc-400"}`}>
                                         {formatTime(seg.start)}
                                       </span>
-                                      {seg.text}
+                                      {segmentText}
                                     </button>
                                   );
                                 })
                               ) : (
                                 // Fallback: show the full transcript as plain text
                                 <p className="text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap">
-                                  {currentRec.transcript}
+                                  {currentRec?.transcript && typeof currentRec.transcript === 'string' ? currentRec.transcript : "No transcript available"}
                                 </p>
                               )}
                             </div>
@@ -1446,6 +1612,11 @@ const RecordingPlaybackModal = ({
                             <div className="flex flex-col items-center justify-center py-8 text-center">
                               <AlertCircle className="w-8 h-8 text-red-400/60 mb-2" />
                               <p className="text-xs text-zinc-400 mb-3">Transcription failed. Try again with a different method:</p>
+                              {(currentRec?.transcription_error || transcriptionCompletedWithoutContent) && (
+                                <p className="text-[11px] text-zinc-500 mb-3 max-w-[280px]">
+                                  {currentRec.transcription_error || "Transcription completed without usable text. Please retry with another method."}
+                                </p>
+                              )}
                               <div className="flex gap-2">
                                 <button
                                   onClick={() => handleRetryTranscription(currentRec, "local")}
@@ -1460,16 +1631,89 @@ const RecordingPlaybackModal = ({
                                   Local Whisper
                                 </button>
                                 <button
-                                  onClick={() => handleRetryTranscription(currentRec, "online")}
+                                  onClick={() => handleRetryTranscription(currentRec, "assemblyai")}
+                                  disabled={!!retryingTranscription}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 border border-indigo-500/30 disabled:opacity-50"
+                                >
+                                  {retryingTranscription?.id === currentRec._id && retryingTranscription?.mode === "assemblyai" ? (
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                  ) : (
+                                    <Zap className="w-3 h-3" />
+                                  )}
+                                  AssemblyAI
+                                </button>
+                              </div>
+                            </div>
+                          ) : transcriptionCancelled ? (
+                            <div className="flex flex-col items-center justify-center py-8 text-center">
+                              <AlertCircle className="w-8 h-8 text-zinc-300/70 mb-2" />
+                              <p className="text-xs text-zinc-300 mb-1">Transcription was stopped.</p>
+                              <p className="text-[10px] text-zinc-500 mb-4">Choose a method to generate again.</p>
+                              <div className="flex gap-3">
+                                <button
+                                  onClick={() => handleRetryTranscription(currentRec, "local", true)}
+                                  disabled={!!retryingTranscription}
+                                  className="flex flex-col items-center gap-2 px-5 py-3 rounded-lg text-xs font-medium bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 border border-emerald-500/25 disabled:opacity-50 transition-colors min-w-[130px]"
+                                >
+                                  {retryingTranscription?.id === currentRec._id && retryingTranscription?.mode === "local" ? (
+                                    <Loader2 className="w-5 h-5 animate-spin" />
+                                  ) : (
+                                    <Cpu className="w-5 h-5" />
+                                  )}
+                                  <span>Local Whisper</span>
+                                  <span className="text-[10px] font-normal text-emerald-400/60">On-device &middot; Python</span>
+                                </button>
+                                <button
+                                  onClick={() => handleRetryTranscription(currentRec, "assemblyai", true)}
+                                  disabled={!!retryingTranscription}
+                                  className="flex flex-col items-center gap-2 px-5 py-3 rounded-lg text-xs font-medium bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20 border border-indigo-500/25 disabled:opacity-50 transition-colors min-w-[130px]"
+                                >
+                                  {retryingTranscription?.id === currentRec._id && retryingTranscription?.mode === "assemblyai" ? (
+                                    <Loader2 className="w-5 h-5 animate-spin" />
+                                  ) : (
+                                    <Zap className="w-5 h-5" />
+                                  )}
+                                  <span>AssemblyAI</span>
+                                  <span className="text-[10px] font-normal text-indigo-400/60">Cloud &middot; Speaker labels</span>
+                                </button>
+                              </div>
+                            </div>
+                          ) : transcriptionStuck ? (
+                            <div className="flex flex-col items-center justify-center py-8 text-center">
+                              <AlertCircle className="w-8 h-8 text-amber-400/70 mb-2" />
+                              <p className="text-xs text-zinc-300 mb-1">Transcription seems stuck.</p>
+                              <p className="text-[11px] text-zinc-500 mb-3 max-w-[280px]">
+                                It has been processing for too long. You can force retry now.
+                              </p>
+                              {currentRec?.transcription_error && (
+                                <p className="text-[11px] text-zinc-500 mb-3 max-w-[280px]">
+                                  {currentRec.transcription_error}
+                                </p>
+                              )}
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => handleRetryTranscription(currentRec, "local", true)}
                                   disabled={!!retryingTranscription}
                                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-zinc-800 text-zinc-200 hover:bg-zinc-700 border border-zinc-700 disabled:opacity-50"
                                 >
-                                  {retryingTranscription?.id === currentRec._id && retryingTranscription?.mode === "online" ? (
+                                  {retryingTranscription?.id === currentRec._id && retryingTranscription?.mode === "local" ? (
                                     <Loader2 className="w-3 h-3 animate-spin" />
                                   ) : (
-                                    <Cloud className="w-3 h-3" />
+                                    <Cpu className="w-3 h-3" />
                                   )}
-                                  OpenAI Cloud
+                                  Force Local Whisper
+                                </button>
+                                <button
+                                  onClick={() => handleRetryTranscription(currentRec, "assemblyai", true)}
+                                  disabled={!!retryingTranscription}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 border border-indigo-500/30 disabled:opacity-50"
+                                >
+                                  {retryingTranscription?.id === currentRec._id && retryingTranscription?.mode === "assemblyai" ? (
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                  ) : (
+                                    <Zap className="w-3 h-3" />
+                                  )}
+                                  Force AssemblyAI
                                 </button>
                               </div>
                             </div>
@@ -1477,7 +1721,7 @@ const RecordingPlaybackModal = ({
                             <div className="flex flex-col items-center justify-center py-8 text-center">
                               <ScrollText className="w-8 h-8 text-zinc-600 mb-2" />
                               <p className="text-xs text-zinc-400 mb-1">No transcript available for this recording</p>
-                              <p className="text-[10px] text-zinc-600 mb-4">Choose a transcription method to generate the transcript</p>
+                              <p className="text-[10px] text-zinc-600 mb-4">Choose how you want to generate the transcript</p>
                               <div className="flex gap-3">
                                 <button
                                   onClick={() => handleRetryTranscription(currentRec, "local")}
@@ -1490,28 +1734,71 @@ const RecordingPlaybackModal = ({
                                     <Cpu className="w-5 h-5" />
                                   )}
                                   <span>Local Whisper</span>
-                                  <span className="text-[10px] font-normal text-emerald-400/60">Free &middot; On-device</span>
+                                  <span className="text-[10px] font-normal text-emerald-400/60">On-device &middot; Python</span>
                                 </button>
                                 <button
-                                  onClick={() => handleRetryTranscription(currentRec, "online")}
+                                  onClick={() => handleRetryTranscription(currentRec, "assemblyai")}
                                   disabled={!!retryingTranscription}
                                   className="flex flex-col items-center gap-2 px-5 py-3 rounded-lg text-xs font-medium bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20 border border-indigo-500/25 disabled:opacity-50 transition-colors min-w-[130px]"
                                 >
-                                  {retryingTranscription?.id === currentRec._id && retryingTranscription?.mode === "online" ? (
+                                  {retryingTranscription?.id === currentRec._id && retryingTranscription?.mode === "assemblyai" ? (
                                     <Loader2 className="w-5 h-5 animate-spin" />
                                   ) : (
-                                    <Cloud className="w-5 h-5" />
+                                    <Zap className="w-5 h-5" />
                                   )}
-                                  <span>OpenAI Cloud</span>
-                                  <span className="text-[10px] font-normal text-indigo-400/60">Paid &middot; API key</span>
+                                  <span>AssemblyAI</span>
+                                  <span className="text-[10px] font-normal text-indigo-400/60">Cloud &middot; Speaker labels</span>
                                 </button>
                               </div>
                             </div>
-                          ) : (
+                          ) : transcriptionPending ? (
                             <div className="flex flex-col items-center justify-center py-8 text-center">
                               <Loader2 className="w-6 h-6 animate-spin text-zinc-500 mb-2" />
                               <p className="text-xs text-zinc-400">Transcription in progress...</p>
                               <p className="text-[10px] text-zinc-600 mt-1">This may take a few minutes depending on recording length.</p>
+                              <button
+                                onClick={() => handleStopTranscription(currentRec)}
+                                disabled={stoppingTranscription === currentRec?._id}
+                                className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-red-500/15 text-red-300 border border-red-500/30 hover:bg-red-500/25 disabled:opacity-50"
+                              >
+                                {stoppingTranscription === currentRec?._id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <X className="w-3 h-3" />
+                                )}
+                                Stop transcription
+                              </button>
+                              {currentRec?.transcription_error && (
+                                <p className="text-[10px] text-zinc-600 mt-2 max-w-[260px]">
+                                  Last error: {currentRec.transcription_error}
+                                </p>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-center justify-center py-8 text-center">
+                              <AlertCircle className="w-8 h-8 text-zinc-500/70 mb-2" />
+                              <p className="text-xs text-zinc-300 mb-1">Unknown transcription state: {transcriptionStatus || "n/a"}</p>
+                              <p className="text-[10px] text-zinc-500 mb-3 max-w-[280px]">
+                                Refresh recording status or generate transcript again.
+                              </p>
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => handleRetryTranscription(currentRec, "local", true)}
+                                  disabled={!!retryingTranscription}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-zinc-800 text-zinc-200 hover:bg-zinc-700 border border-zinc-700 disabled:opacity-50"
+                                >
+                                  <Cpu className="w-3 h-3" />
+                                  Retry Local Whisper
+                                </button>
+                                <button
+                                  onClick={() => handleRetryTranscription(currentRec, "assemblyai", true)}
+                                  disabled={!!retryingTranscription}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 border border-indigo-500/30 disabled:opacity-50"
+                                >
+                                  <Zap className="w-3 h-3" />
+                                  Retry AssemblyAI
+                                </button>
+                              </div>
                             </div>
                           )}
                         </div>
@@ -1541,17 +1828,23 @@ const RecordingPlaybackModal = ({
                                 </button>
                               </div>
                               <div className="prose prose-invert prose-xs max-w-none text-xs text-zinc-300 leading-relaxed [&_h1]:text-sm [&_h1]:font-bold [&_h1]:text-zinc-100 [&_h1]:mt-3 [&_h1]:mb-1 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:text-zinc-200 [&_h2]:mt-3 [&_h2]:mb-1 [&_h3]:text-xs [&_h3]:font-medium [&_h3]:text-zinc-200 [&_h3]:mt-2 [&_h3]:mb-1 [&_strong]:text-zinc-200 [&_ul]:space-y-0.5 [&_ol]:space-y-0.5 [&_li]:text-zinc-300">
-                                {notes.meeting_notes.split("\n").map((line, i) => {
-                                  // Simple markdown rendering for the notes
-                                  if (line.startsWith("# ")) return <h1 key={i}>{line.slice(2)}</h1>;
-                                  if (line.startsWith("## ")) return <h2 key={i}>{line.slice(3)}</h2>;
-                                  if (line.startsWith("### ")) return <h3 key={i}>{line.slice(4)}</h3>;
-                                  if (line.startsWith("**") && line.endsWith("**")) return <p key={i}><strong>{line.slice(2, -2)}</strong></p>;
-                                  if (line.startsWith("- ")) return <li key={i} className="ml-4 list-disc">{line.slice(2)}</li>;
-                                  if (/^\d+\.\s/.test(line)) return <li key={i} className="ml-4 list-decimal">{line.replace(/^\d+\.\s/, "")}</li>;
-                                  if (line.trim() === "") return <br key={i} />;
-                                  return <p key={i}>{line}</p>;
-                                })}
+                                {notes && notes.meeting_notes && typeof notes.meeting_notes === 'string' ? (
+                                  notes.meeting_notes.split("\n").map((line, i) => {
+                                    // Guard: ensure line is a string
+                                    if (!line || typeof line !== 'string') return null;
+                                    // Simple markdown rendering for the notes
+                                    if (line.startsWith("# ")) return <h1 key={i}>{line.slice(2)}</h1>;
+                                    if (line.startsWith("## ")) return <h2 key={i}>{line.slice(3)}</h2>;
+                                    if (line.startsWith("### ")) return <h3 key={i}>{line.slice(4)}</h3>;
+                                    if (line.startsWith("**") && line.endsWith("**")) return <p key={i}><strong>{line.slice(2, -2)}</strong></p>;
+                                    if (line.startsWith("- ")) return <li key={i} className="ml-4 list-disc">{line.slice(2)}</li>;
+                                    if (/^\d+\.\s/.test(line)) return <li key={i} className="ml-4 list-decimal">{line.replace(/^\d+\.\s/, "")}</li>;
+                                    if (line.trim() === "") return <br key={i} />;
+                                    return <p key={i}>{line}</p>;
+                                  })
+                                ) : (
+                                  <p className="text-zinc-400 italic">No notes available</p>
+                                )}
                               </div>
                             </div>
                           ) : transcriptionReady ? (
@@ -1641,14 +1934,20 @@ const RecordingPlaybackModal = ({
                                         </div>
                                       )}
                                       <div className="whitespace-pre-wrap">
-                                        {msg.content.split("\n").map((line, j) => {
-                                          if (line.startsWith("**") && line.endsWith("**"))
-                                            return <p key={j}><strong className="text-zinc-200">{line.slice(2, -2)}</strong></p>;
-                                          if (line.startsWith("- "))
-                                            return <p key={j} className="ml-2">• {line.slice(2)}</p>;
-                                          if (line.trim() === "") return <br key={j} />;
-                                          return <p key={j}>{line}</p>;
-                                        })}
+                                        {msg && msg.content && typeof msg.content === 'string' ? (
+                                          msg.content.split("\n").map((line, j) => {
+                                            // Guard: ensure line is a string
+                                            if (!line || typeof line !== 'string') return null;
+                                            if (line.startsWith("**") && line.endsWith("**"))
+                                              return <p key={j}><strong className="text-zinc-200">{line.slice(2, -2)}</strong></p>;
+                                            if (line.startsWith("- "))
+                                              return <p key={j} className="ml-2">• {line.slice(2)}</p>;
+                                            if (line.trim() === "") return <br key={j} />;
+                                            return <p key={j}>{line}</p>;
+                                          })
+                                        ) : (
+                                          <p className="text-zinc-400 italic">No content available</p>
+                                        )}
                                       </div>
                                     </div>
                                   </div>
@@ -2352,6 +2651,11 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
       };
 
       if (editingMeeting) {
+        // Validate that meeting has an ID
+        if (!editingMeeting._id) {
+          toast.error("Meeting ID is missing. Please reload and try again.");
+          return;
+        }
         const { data } = await axios.put(
           `${BACKEND_URL}/meetings/${editingMeeting._id}`,
           payload,
@@ -2438,7 +2742,14 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
         axiosConfig
       );
       const meeting = data.data;
-      notifyPolicyWarnings(data.policy_warnings);
+
+      // Validate meeting ID exists
+      if (!meeting || !meeting._id) {
+        toast.error("Failed to create meeting: No ID returned from server");
+        return;
+      }
+
+      notifyPolicyWarnings(data.data._policy_warnings);
       setMeetings((prev) => {
         if (prev.some((m) => m._id === meeting._id)) return prev;
         return [...prev, meeting];
@@ -3000,6 +3311,7 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
             chatContainerRef={chatContainerRef}
             copyMeetingLink={copyMeetingLink}
             handleLeaveMeeting={handleLeaveMeeting}
+            socket={socket}
             onUploadRecordings={handleUploadRecordings}
             lobbyRequests={lobbyRequests}
             onAdmitToLobby={handleAdmitToLobby}
@@ -3224,7 +3536,7 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
           {/* Search & Filter bar */}
           <div className="flex items-center gap-2 mb-3">
             <div className="relative flex-1">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
+              <Search className="absolute left-2.5 inset-y-0 my-auto w-3.5 h-3.5 text-zinc-500" />
               <input
                 type="text"
                 value={meetingSearchQuery}
@@ -3516,6 +3828,7 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
           loadingRecordingsId={loadingRecordingsId}
           recordingsByMeeting={recordingsByMeeting}
           axiosConfig={axiosConfig}
+          isAdminUser={user?.user_type === "admin"}
         />
       )}
 
@@ -3714,7 +4027,7 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
                   ))}
                 </div>
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
+                  <Search className="absolute left-3 inset-y-0 my-auto w-3.5 h-3.5 text-zinc-500" />
                   <input
                     type="text"
                     value={searchQuery}
