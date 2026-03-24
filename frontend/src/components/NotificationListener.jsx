@@ -181,6 +181,16 @@ export const NotificationListener = () => {
       });
       // The call was rejected, clear the call UI
       toast.error(`Your ${data.callType} call was rejected`);
+
+      // IMPORTANT: Dispatch custom event to tell the call hook to clear state
+      // This ensures the "calling" state is immediately cleared in the UI
+      console.log("[NOTIFICATION_LISTENER] 📤 Dispatching call rejection event to hook");
+      window.dispatchEvent(new CustomEvent('notification:call-rejection-received', {
+        detail: {
+          callType: data.callType,
+          rejectedBy: data.rejectedBy,
+        }
+      }));
     });
 
     // Cleanup listeners on unmount
@@ -292,21 +302,49 @@ export const NotificationListener = () => {
             console.error("[NOTIFICATION_LISTENER] ❌ Socket not connected!");
           }
         } else if (action === "reject") {
-          console.log("[NOTIFICATION_LISTENER] 📤 Rejecting call from notification");
+          console.log("[NOTIFICATION_LISTENER] 🚫 REJECTING call from notification");
+          console.log("[NOTIFICATION_LISTENER] Source ID (caller):", sourceId);
+          console.log("[NOTIFICATION_LISTENER] Call type:", callType);
 
           const currentSocket = socketRef.current;
 
-          if (currentSocket && currentSocket.connected) {
-            try {
-              currentSocket.emit("call:reject-and-dismiss", {
-                callId: sourceId,
+          // Log socket status
+          if (!currentSocket) {
+            console.error("[NOTIFICATION_LISTENER] ❌ Socket reference is null!");
+            return;
+          }
+
+          if (!currentSocket.connected) {
+            console.error("[NOTIFICATION_LISTENER] ❌ Socket is NOT connected! State:", currentSocket.connected);
+            return;
+          }
+
+          console.log("[NOTIFICATION_LISTENER] ✅ Socket is connected and ready");
+
+          try {
+            const rejectPayload = {
+              callId: sourceId,
+              callType: callType || "audio",
+              notificationId,
+            };
+
+            console.log("[NOTIFICATION_LISTENER] 📤 Emitting call:reject-and-dismiss with payload:", rejectPayload);
+            currentSocket.emit("call:reject-and-dismiss", rejectPayload);
+
+            console.log("[NOTIFICATION_LISTENER] ✅ call:reject-and-dismiss emitted successfully");
+
+            // ALSO dispatch custom event to clear the receiver's own call UI state
+            // This clears the "incoming call" popup on the receiver's side
+            window.dispatchEvent(new CustomEvent('notification:call-rejected', {
+              detail: {
                 callType: callType || "audio",
+                sourceId,
                 notificationId,
-              });
-              console.log("[NOTIFICATION_LISTENER] ✅ call:reject-and-dismiss emitted successfully");
-            } catch (error) {
-              console.error("[NOTIFICATION_LISTENER] ❌ Error emitting call:reject-and-dismiss:", error.message);
-            }
+              }
+            }));
+            console.log("[NOTIFICATION_LISTENER] ✅ Custom rejection event dispatched for UI cleanup");
+          } catch (error) {
+            console.error("[NOTIFICATION_LISTENER] ❌ Error emitting call:reject-and-dismiss:", error.message, error);
           }
         }
       }

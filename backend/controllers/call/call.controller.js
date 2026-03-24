@@ -106,6 +106,7 @@ export const requestCall = async (req, res) => {
           type: notification.type,
           title: notification.title,
           body: notification.body,
+          sender_id: notification.sender_id, // ADD: Include sender_id (caller's user ID)
           sender_name: notification.sender_name,
           sender_avatar: notification.sender_avatar,
           action_url: notification.action_url,

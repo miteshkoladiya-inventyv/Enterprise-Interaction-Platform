@@ -234,7 +234,7 @@ self.addEventListener("notificationclick", (event) => {
             const targetClient = clientList[0];
             console.log(`[SERVICE_WORKER] Target client URL:`, targetClient.url);
 
-            // Post message BEFORE focusing to ensure it's received
+            // Post message to handle the action
             const messageData = {
               type: "CALL_ACTION_FROM_NOTIFICATION",
               action: action,
@@ -243,12 +243,11 @@ self.addEventListener("notificationclick", (event) => {
               callType: notificationType === "video_call" ? "video" : "audio",
             };
 
-            console.log(`[SERVICE_WORKER] 📤 Posting message to client:`, messageData);
+            console.log(`[SERVICE_WORKER] 📤 Posting call action message (NOT focusing):`, messageData);
             targetClient.postMessage(messageData);
 
-            // Then focus the client
-            await targetClient.focus();
-            console.log(`[SERVICE_WORKER] ✅ Client focused after posting message`);
+            // DO NOT focus - handle silently in background
+            console.log(`[SERVICE_WORKER] ✅ Call action posted - will be handled in background`);
           } catch (error) {
             console.error("[SERVICE_WORKER] ❌ Error in call action handler:", error);
           }

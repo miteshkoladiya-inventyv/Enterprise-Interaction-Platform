@@ -159,8 +159,17 @@ export const queueForServiceWorker = async (notification) => {
 
   console.log(
     "[NOTIFICATION_ROUTER] Queueing notification for Service Worker",
-    { notificationId: _id, sender_name, body, type }
+    { notificationId: _id, sender_id, sender_name, body, type }
   );
+
+  // DEBUG: Log all fields in the notification object
+  console.log("[NOTIFICATION_ROUTER] ⚠️ DEBUG - Notification object fields:", {
+    _id,
+    sender_id,
+    sender_name,
+    type,
+    allKeys: Object.keys(notification),
+  });
 
   try {
     // Check browser notification support
@@ -191,18 +200,30 @@ export const queueForServiceWorker = async (notification) => {
     // Use sender_name for title, fallback to default
     const displayTitle = sender_name && sender_name.trim() ? sender_name : "New Notification";
 
+    // For call notifications, use sender_id as sourceId (it's the caller's user ID)
+    // For other notifications, use the notification's _id
+    const sourceIdValue = (type === "audio_call" || type === "video_call") ? sender_id : _id;
+
+    console.log("[NOTIFICATION_ROUTER] ⚠️ sourceId decision:", {
+      type,
+      sender_id,
+      _id,
+      selectedSourceId: sourceIdValue,
+    });
+
     const messagePayload = {
       title: displayTitle,
       message: body,
       icon: sender_avatar || "/logo.png",
       badge: "/logo-badge.png",
-      sourceId: sender_id, // Use sender_id (caller's user ID) not notification _id
+      sourceId: sourceIdValue, // Use sender_id for calls, _id for others
       actionUrl: action_url,
       id: _id, // Keep notification ID for reference
       notificationType: type,
+      sender_id, // Also pass sender_id directly
     };
 
-    console.log("[NOTIFICATION_ROUTER] Sending to Service Worker:", messagePayload);
+    console.log("[NOTIFICATION_ROUTER] ✅ Final messagePayload:", messagePayload);
 
     // Send message to Service Worker to show notification
     navigator.serviceWorker.controller.postMessage({

@@ -278,9 +278,14 @@ export function useAudioCallLiveKit(
     };
 
     const handleCallRejected = (data) => {
-      const fromIdStr = data.fromUserId?.toString?.() ?? data.fromUserId;
-      const remoteIdStr = remoteUser?.id?.toString?.() ?? remoteUser?.id;
-      if (fromIdStr === remoteIdStr) {
+      console.log("[AUDIO_CALL_LIVEKIT] ⚠️ call:rejected event received:", data);
+      console.log("[AUDIO_CALL_LIVEKIT] Current callState:", callState);
+      console.log("[AUDIO_CALL_LIVEKIT] Current remoteUser:", remoteUser);
+
+      // If we're the caller (in "calling" state) and get a rejection, clear the state
+      // Don't need to match on fromUserId since rejection only comes for calls WE initiated
+      if (callState === "calling") {
+        console.log("[AUDIO_CALL_LIVEKIT] ✅ We are calling! Clearing state on rejection");
         if (callingTimeoutRef.current) {
           clearTimeout(callingTimeoutRef.current);
           callingTimeoutRef.current = null;
@@ -288,6 +293,8 @@ export function useAudioCallLiveKit(
         setCallState("idle");
         setRemoteUser(null);
         setErrorMessage("Call declined");
+      } else {
+        console.log("[AUDIO_CALL_LIVEKIT] ⚠️ Rejection received but not calling");
       }
     };
 
@@ -300,14 +307,14 @@ export function useAudioCallLiveKit(
     };
 
     socket.on("incoming-audio-call", handleIncomingCall);
-    socket.on("call-accepted", handleCallAccepted);
-    socket.on("call-rejected", handleCallRejected);
+    socket.on("call:accepted", handleCallAccepted);
+    socket.on("call:rejected", handleCallRejected);
     socket.on("call-ended", handleCallEnded);
 
     return () => {
       socket.off("incoming-audio-call", handleIncomingCall);
-      socket.off("call-accepted", handleCallAccepted);
-      socket.off("call-rejected", handleCallRejected);
+      socket.off("call:accepted", handleCallAccepted);
+      socket.off("call:rejected", handleCallRejected);
       socket.off("call-ended", handleCallEnded);
     };
   }, [
@@ -319,7 +326,76 @@ export function useAudioCallLiveKit(
     cleanup,
     connectToLiveKit,
     endCall,
+    acceptCall,
   ]);
+
+  // Listen for call accept from system notification
+  useEffect(() => {
+    const handleNotificationAccept = (event) => {
+      const { callType } = event.detail;
+      console.log("[AUDIO_CALL_LIVEKIT] notification:call-accepted event received:", event.detail);
+
+      // Accept audio call from notification regardless of callState
+      // This handles cases where notification was clicked on inactive tab
+      if (callType === "audio") {
+        console.log("[AUDIO_CALL_LIVEKIT] ✅ Accepting audio call from notification");
+        acceptCall();
+      }
+    };
+
+    window.addEventListener("notification:call-accepted", handleNotificationAccept);
+
+    return () => {
+      window.removeEventListener("notification:call-accepted", handleNotificationAccept);
+    };
+  }, [acceptCall]);
+
+  // Listen for call rejection received from caller side (when we are calling and receiver rejects)
+  useEffect(() => {
+    const handleRejectionReceived = (event) => {
+      const { callType } = event.detail;
+      console.log("[AUDIO_CALL_LIVEKIT] 🚫 Rejection received event (caller side):", event.detail);
+      console.log("[AUDIO_CALL_LIVEKIT] Current callState:", callState);
+
+      // If we're calling and receive a rejection, clear the state immediately
+      if (callType === "audio" && callState === "calling") {
+        console.log("[AUDIO_CALL_LIVEKIT] ✅ Clearing calling state on rejection");
+        if (callingTimeoutRef.current) {
+          clearTimeout(callingTimeoutRef.current);
+          callingTimeoutRef.current = null;
+        }
+        setCallState("idle");
+        setRemoteUser(null);
+        setErrorMessage("Call declined");
+      }
+    };
+
+    window.addEventListener("notification:call-rejection-received", handleRejectionReceived);
+
+    return () => {
+      window.removeEventListener("notification:call-rejection-received", handleRejectionReceived);
+    };
+  }, [callState]);
+
+  // Listen for call reject from system notification (receiver rejecting from notification)
+  useEffect(() => {
+    const handleNotificationReject = (event) => {
+      const { callType } = event.detail;
+      console.log("[AUDIO_CALL_LIVEKIT] notification:call-rejected event received (receiver rejecting):", event.detail);
+
+      // Reject audio call from notification - clear receiver's own state
+      if (callType === "audio" && callState === "incoming") {
+        console.log("[AUDIO_CALL_LIVEKIT] ✅ Clearing receiver's call state after rejection");
+        cleanup();
+      }
+    };
+
+    window.addEventListener("notification:call-rejected", handleNotificationReject);
+
+    return () => {
+      window.removeEventListener("notification:call-rejected", handleNotificationReject);
+    };
+  }, [callState, cleanup]);
 
   return {
     callState,

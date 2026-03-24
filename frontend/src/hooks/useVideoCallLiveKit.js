@@ -290,9 +290,14 @@ export function useVideoCallLiveKit(
     };
 
     const handleCallRejected = (data) => {
-      const fromIdStr = data.fromUserId?.toString?.() ?? data.fromUserId;
-      const remoteIdStr = remoteUser?.id?.toString?.() ?? remoteUser?.id;
-      if (fromIdStr === remoteIdStr) {
+      console.log("[VIDEO_CALL_LIVEKIT] ⚠️ call:rejected event received:", data);
+      console.log("[VIDEO_CALL_LIVEKIT] Current callState:", callState);
+      console.log("[VIDEO_CALL_LIVEKIT] Current remoteUser:", remoteUser);
+
+      // If we're the caller (in "calling" state) and get a rejection, clear the state
+      // Don't need to match on fromUserId since rejection only comes for calls WE initiated
+      if (callState === "calling") {
+        console.log("[VIDEO_CALL_LIVEKIT] ✅ We are calling! Clearing state on rejection");
         if (callingTimeoutRef.current) {
           clearTimeout(callingTimeoutRef.current);
           callingTimeoutRef.current = null;
@@ -300,6 +305,8 @@ export function useVideoCallLiveKit(
         setCallState("idle");
         setRemoteUser(null);
         setErrorMessage("Call declined");
+      } else {
+        console.log("[VIDEO_CALL_LIVEKIT] ⚠️ Rejection received but not calling");
       }
     };
 
@@ -312,14 +319,14 @@ export function useVideoCallLiveKit(
     };
 
     socket.on("incoming-video-call", handleIncomingCall);
-    socket.on("video-call-accepted", handleCallAccepted);
-    socket.on("video-call-rejected", handleCallRejected);
+    socket.on("call:accepted", handleCallAccepted);
+    socket.on("call:rejected", handleCallRejected);
     socket.on("video-call-ended", handleCallEnded);
 
     return () => {
       socket.off("incoming-video-call", handleIncomingCall);
-      socket.off("video-call-accepted", handleCallAccepted);
-      socket.off("video-call-rejected", handleCallRejected);
+      socket.off("call:accepted", handleCallAccepted);
+      socket.off("call:rejected", handleCallRejected);
       socket.off("video-call-ended", handleCallEnded);
     };
   }, [
@@ -331,7 +338,76 @@ export function useVideoCallLiveKit(
     cleanup,
     connectToLiveKit,
     endCall,
+    acceptCall,
   ]);
+
+  // Listen for call accept from system notification
+  useEffect(() => {
+    const handleNotificationAccept = (event) => {
+      const { callType } = event.detail;
+      console.log("[VIDEO_CALL_LIVEKIT] notification:call-accepted event received:", event.detail);
+
+      // Accept video call from notification regardless of callState
+      // This handles cases where notification was clicked on inactive tab
+      if (callType === "video") {
+        console.log("[VIDEO_CALL_LIVEKIT] ✅ Accepting video call from notification");
+        acceptCall();
+      }
+    };
+
+    window.addEventListener("notification:call-accepted", handleNotificationAccept);
+
+    return () => {
+      window.removeEventListener("notification:call-accepted", handleNotificationAccept);
+    };
+  }, [acceptCall]);
+
+  // Listen for call rejection received from caller side (when we are calling and receiver rejects)
+  useEffect(() => {
+    const handleRejectionReceived = (event) => {
+      const { callType } = event.detail;
+      console.log("[VIDEO_CALL_LIVEKIT] 🚫 Rejection received event (caller side):", event.detail);
+      console.log("[VIDEO_CALL_LIVEKIT] Current callState:", callState);
+
+      // If we're calling and receive a rejection, clear the state immediately
+      if (callType === "video" && callState === "calling") {
+        console.log("[VIDEO_CALL_LIVEKIT] ✅ Clearing calling state on rejection");
+        if (callingTimeoutRef.current) {
+          clearTimeout(callingTimeoutRef.current);
+          callingTimeoutRef.current = null;
+        }
+        setCallState("idle");
+        setRemoteUser(null);
+        setErrorMessage("Call declined");
+      }
+    };
+
+    window.addEventListener("notification:call-rejection-received", handleRejectionReceived);
+
+    return () => {
+      window.removeEventListener("notification:call-rejection-received", handleRejectionReceived);
+    };
+  }, [callState]);
+
+  // Listen for call reject from system notification (receiver rejecting from notification)
+  useEffect(() => {
+    const handleNotificationReject = (event) => {
+      const { callType } = event.detail;
+      console.log("[VIDEO_CALL_LIVEKIT] notification:call-rejected event received (receiver rejecting):", event.detail);
+
+      // Reject video call from notification - clear receiver's own state
+      if (callType === "video" && callState === "incoming") {
+        console.log("[VIDEO_CALL_LIVEKIT] ✅ Clearing receiver's call state after rejection");
+        cleanup();
+      }
+    };
+
+    window.addEventListener("notification:call-rejected", handleNotificationReject);
+
+    return () => {
+      window.removeEventListener("notification:call-rejected", handleNotificationReject);
+    };
+  }, [callState, cleanup]);
 
   return {
     callState,

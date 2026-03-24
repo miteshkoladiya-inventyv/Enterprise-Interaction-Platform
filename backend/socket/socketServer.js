@@ -1605,6 +1605,7 @@ io.on("connection", async (socket) => {
       if (callerSocketId) {
         console.log(`[CALL_REJECT] 📤 Sending call:rejected to caller ${callId}`);
         io.to(callerSocketId).emit("call:rejected", {
+          fromUserId: socket.userId, // The receiver's ID (for hook to match with remoteUser.id)
           rejectedBy: socket.userId,
           callType,
           timestamp: new Date(),
