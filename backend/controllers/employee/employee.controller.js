@@ -110,6 +110,7 @@ export const createEmployee = async (req, res) => {
       position,
       team_lead_id,
       hire_date,
+      shift_type,
     } = req.body;
 
     // Prevent creating admin accounts
@@ -131,6 +132,18 @@ export const createEmployee = async (req, res) => {
       "intern",
     ];
     const leadershipPositions = ["ceo", "cto", "project_manager", "team_lead"];
+
+    if (country === "india" && !shift_type) {
+      return res.status(400).json({
+        error: "Shift is required for employees in India",
+      });
+    }
+
+    if (shift_type && !["day", "night"].includes(shift_type)) {
+      return res.status(400).json({
+        error: "Shift must be either day or night",
+      });
+    }
 
     // Validation based on employee_type
     if (employee_type === "internal_team") {
@@ -226,6 +239,7 @@ export const createEmployee = async (req, res) => {
       user_id: user._id,
       employee_type,
       hire_date: hire_date || new Date(),
+      shift_type: country === "india" ? shift_type : null,
       is_active: true,
     };
 
@@ -313,6 +327,9 @@ export const createEmployee = async (req, res) => {
     if (employee.team_lead_id) {
       responseData.employee.team_lead_id = employee.team_lead_id;
     }
+    if (employee.shift_type) {
+      responseData.employee.shift_type = employee.shift_type;
+    }
 
     res.status(201).json(responseData);
   } catch (error) {
@@ -324,13 +341,14 @@ export const createEmployee = async (req, res) => {
 // Get All Employees
 export const getAllEmployees = async (req, res) => {
   try {
-    const { department, position, employee_type, is_active, page, limit, search } = req.query;
+    const { department, position, employee_type, is_active, shift_type, page, limit, search } = req.query;
 
     // Build filter
     const filter = {};
     if (department && department !== "all") filter.department = department;
     if (position) filter.position = position;
     if (employee_type) filter.employee_type = employee_type;
+    if (shift_type && shift_type !== "all") filter.shift_type = shift_type;
     if (is_active !== undefined) filter.is_active = is_active === "true";
 
     // If search is provided, we need to find matching user IDs first
@@ -450,6 +468,7 @@ export const updateEmployee = async (req, res) => {
       employee_type,
       is_active,
       hire_date,
+      shift_type,
     } = req.body;
 
     // Find employee
@@ -468,6 +487,18 @@ export const updateEmployee = async (req, res) => {
     await employee.user_id.save();
 
     // Update employee details
+    if (employee.user_id.country === "india" && !shift_type) {
+      return res.status(400).json({
+        error: "Shift is required for employees in India",
+      });
+    }
+
+    if (shift_type && !["day", "night"].includes(shift_type)) {
+      return res.status(400).json({
+        error: "Shift must be either day or night",
+      });
+    }
+
     if (department) employee.department = department;
     if (position) employee.position = position;
     if (team_lead_id !== undefined)
@@ -475,6 +506,8 @@ export const updateEmployee = async (req, res) => {
     if (employee_type) employee.employee_type = employee_type;
     if (is_active !== undefined) employee.is_active = is_active;
     if (hire_date) employee.hire_date = hire_date;
+    employee.shift_type =
+      employee.user_id.country === "india" ? shift_type : null;
 
     await employee.save();
 

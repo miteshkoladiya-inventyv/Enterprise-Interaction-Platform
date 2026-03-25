@@ -601,7 +601,7 @@
 // };
 
 // export default ChannelSettingsModal;
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   X,
   Search,
@@ -614,6 +614,7 @@ import {
   ChevronDown,
   Edit2,
   Check,
+  ImagePlus,
 } from "lucide-react";
 import { useAuthContext } from "../context/AuthContextProvider";
 import { toast } from "sonner";
@@ -642,7 +643,10 @@ const ChannelSettingsModal = ({
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedChannelName, setEditedChannelName] = useState("");
   const [savingChannelName, setSavingChannelName] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [channelAvatarUrl, setChannelAvatarUrl] = useState("");
   const [userRole, setUserRole] = useState(null);
+  const avatarInputRef = useRef(null);
 
   const { socket, user } = useAuthContext();
   const token = localStorage.getItem("token");
@@ -652,6 +656,7 @@ const ChannelSettingsModal = ({
     if (show && channel?._id) {
       fetchChannelMembers();
       setEditedChannelName(channel?.name || "");
+      setChannelAvatarUrl(channel?.avatar_url || "");
     }
   }, [show, channel]);
 
@@ -719,8 +724,15 @@ const ChannelSettingsModal = ({
     const handleChannelNameUpdate = (data) => {
       const eventChannelId = data.channelId || data.channel_id;
       if (eventChannelId === channel?._id) {
-        setEditedChannelName(data.new_name);
+        setEditedChannelName(data.name || data.new_name || channel?.name || "");
         setIsEditingName(false);
+      }
+    };
+
+    const handleChannelAvatarUpdate = (data) => {
+      const eventChannelId = data.channelId || data.channel_id;
+      if (eventChannelId === channel?._id) {
+        setChannelAvatarUrl(data.avatar_url || "");
       }
     };
 
@@ -736,6 +748,7 @@ const ChannelSettingsModal = ({
     socket.on("member-removed", handleMemberRemoved);
     socket.on("removeMember", handleMemberRemoved);
     socket.on("channel_name_changed", handleChannelNameUpdate);
+    socket.on("channel_avatar_changed", handleChannelAvatarUpdate);
 
     return () => {
       socket.off("changesRole", handleRoleChange);
@@ -750,6 +763,7 @@ const ChannelSettingsModal = ({
       socket.off("member-removed", handleMemberRemoved);
       socket.off("removeMember", handleMemberRemoved);
       socket.off("channel_name_changed", handleChannelNameUpdate);
+      socket.off("channel_avatar_changed", handleChannelAvatarUpdate);
     };
   }, [socket, show, channel?._id, user?.id]);
 
@@ -882,8 +896,8 @@ const ChannelSettingsModal = ({
       if (response.data.success) {
         setIsEditingName(false);
         if (channel) channel.name = editedChannelName.trim();
+        toast.success("Group name updated");
       }
-      onClose();
     } catch (error) {
       toast.error(
         error.response?.data?.error || "Failed to update channel name"
@@ -891,6 +905,42 @@ const ChannelSettingsModal = ({
       setEditedChannelName(channel?.name || "");
     } finally {
       setSavingChannelName(false);
+    }
+  };
+
+  const handleAvatarSelection = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !channel?._id) return;
+
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please select an image file");
+      return;
+    }
+
+    setUploadingAvatar(true);
+    try {
+      const formData = new FormData();
+      formData.append("avatar", file);
+
+      await axios.post(
+        `${BACKEND_URL}/chat/channels/${channel._id}/avatar`,
+        formData,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "multipart/form-data",
+          },
+        }
+      );
+
+      toast.success("Group avatar updated");
+    } catch (error) {
+      toast.error(
+        error.response?.data?.error || "Failed to update channel avatar"
+      );
+    } finally {
+      setUploadingAvatar(false);
+      if (avatarInputRef.current) avatarInputRef.current.value = "";
     }
   };
 
@@ -913,6 +963,53 @@ const ChannelSettingsModal = ({
             >
               <X size={18} />
             </button>
+          </div>
+
+          <div className="mb-4 flex items-center gap-3">
+            <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white">
+              {channelAvatarUrl ? (
+                <img
+                  src={channelAvatarUrl}
+                  alt={channel?.name || "Group avatar"}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <span className="text-lg font-semibold">
+                  {(editedChannelName || channel?.name)?.[0] || "G"}
+                </span>
+              )}
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-medium text-zinc-200">
+                {editedChannelName || channel?.name || "Group"}
+              </p>
+              <p className="text-xs text-zinc-500">
+                Update the group image and name here
+              </p>
+            </div>
+            {isAdmin && (
+              <>
+                <input
+                  ref={avatarInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleAvatarSelection}
+                />
+                <button
+                  onClick={() => avatarInputRef.current?.click()}
+                  disabled={uploadingAvatar}
+                  className="flex items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-200 transition hover:bg-zinc-700 disabled:opacity-50"
+                >
+                  {uploadingAvatar ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <ImagePlus size={14} />
+                  )}
+                  Avatar
+                </button>
+              </>
+            )}
           </div>
 
           {isEditingName ? (

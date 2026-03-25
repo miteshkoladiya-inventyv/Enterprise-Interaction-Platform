@@ -51,6 +51,11 @@ const employeeSchema = new mongoose.Schema(
       type: Date,
       required: true,
     },
+    shift_type: {
+      type: String,
+      enum: ["day", "night"],
+      default: null,
+    },
     is_active: {
       type: Boolean,
       default: true,

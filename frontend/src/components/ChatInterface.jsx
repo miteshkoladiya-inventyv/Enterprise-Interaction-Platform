@@ -34,9 +34,11 @@ import {
   Edit,
   Star,
   Pin,
-  AtSign,
   Bell,
   Info,
+  Forward,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import axios from "axios";
 import { toast } from "sonner";
@@ -62,6 +64,7 @@ import { useCallContext } from "../context/CallContextProvider";
 import ActiveVideoCallBar from "./ActiveVideoCallBar";
 import IncomingVideoCallModal from "./IncomingVideoCallModal";
 import OutgoingVideoCallModal from "./OutgoingVideoCallModal";
+import notificationService from "../services/notificationService";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -100,9 +103,18 @@ const ChatInterface = () => {
   const [groupCallStatus, setGroupCallStatus] = useState(null);
   const [activeGroupCalls, setActiveGroupCalls] = useState({});
   const [removedFromChannelId, setRemovedFromChannelId] = useState(null);
+  const [typingUsers, setTypingUsers] = useState([]);
+  const [mutedChannelIds, setMutedChannelIds] = useState([]);
+  const [draftsByChannel, setDraftsByChannel] = useState({});
+  const [showForwardModal, setShowForwardModal] = useState(false);
+  const [messageToForward, setMessageToForward] = useState(null);
+  const [forwardSearchQuery, setForwardSearchQuery] = useState("");
+  const [forwardingMessage, setForwardingMessage] = useState(false);
   const messagesEndRef = useRef(null);
   const searchTimeoutRef = useRef(null);
   const selectedChatRef = useRef(null);
+  const messageRefs = useRef({});
+  const typingTimeoutRef = useRef(null);
   const [showFileUpload, setShowFileUpload] = useState(false);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -377,6 +389,107 @@ const ChatInterface = () => {
   const token = localStorage.getItem("token");
   const axiosConfig = { headers: { Authorization: `Bearer ${token}` } };
 
+  useEffect(() => {
+    const loadMutedChannels = async () => {
+      try {
+        if (!token) return;
+        const response = await notificationService.getPreferences(token);
+        const mutedChannels =
+          response?.data?.muted_channels ||
+          response?.muted_channels ||
+          [];
+        setMutedChannelIds(
+          mutedChannels.map((channelId) => String(channelId))
+        );
+      } catch (error) {
+        console.error("Failed to load notification preferences:", error);
+      }
+    };
+
+    loadMutedChannels();
+  }, [token]);
+
+  useEffect(() => {
+    if (!socket || !selectedChat?._id) return;
+
+    socket.emit("join-channel", { channel_id: selectedChat._id });
+
+    return () => {
+      socket.emit("leave-channel", { channel_id: selectedChat._id });
+    };
+  }, [socket, selectedChat?._id]);
+
+  useEffect(() => {
+    if (!selectedChat?._id) return;
+
+    const storageKey = getDraftStorageKey(selectedChat._id);
+    const storedDraft = localStorage.getItem(storageKey);
+    setDraftsByChannel((prev) => ({
+      ...prev,
+      [selectedChat._id]: storedDraft || "",
+    }));
+    setNewMessage(storedDraft || "");
+  }, [selectedChat?._id]);
+
+  useEffect(() => {
+    if (!selectedChat?._id) return;
+
+    const storageKey = getDraftStorageKey(selectedChat._id);
+
+    if (newMessage.trim()) {
+      localStorage.setItem(storageKey, newMessage);
+      setDraftsByChannel((prev) => ({
+        ...prev,
+        [selectedChat._id]: newMessage,
+      }));
+    } else {
+      localStorage.removeItem(storageKey);
+      setDraftsByChannel((prev) => {
+        if (!prev[selectedChat._id]) return prev;
+        const next = { ...prev };
+        delete next[selectedChat._id];
+        return next;
+      });
+    }
+  }, [newMessage, selectedChat?._id]);
+
+  useEffect(() => {
+    if (!socket || !selectedChat?._id) return;
+
+    const isTypingCandidate =
+      newMessage.trim().length > 0 && !showMentionSuggestions;
+
+    if (isTypingCandidate) {
+      socket.emit("channel-typing-start", {
+        channelId: selectedChat._id,
+        userName: currentUserName,
+      });
+
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+
+      typingTimeoutRef.current = setTimeout(() => {
+        socket.emit("channel-typing-stop", {
+          channelId: selectedChat._id,
+        });
+      }, 1200);
+    } else {
+      socket.emit("channel-typing-stop", {
+        channelId: selectedChat._id,
+      });
+    }
+
+    return () => {
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+      socket.emit("channel-typing-stop", {
+        channelId: selectedChat._id,
+      });
+    };
+  }, [socket, selectedChat?._id, newMessage, currentUserName, showMentionSuggestions]);
+
   const requestCallApi = useCallback(
     async (toUserId) => {
       try {
@@ -555,6 +668,10 @@ const ChatInterface = () => {
   useEffect(() => {
     selectedChatRef.current = selectedChat;
   }, [selectedChat]);
+
+  useEffect(() => {
+    setTypingUsers([]);
+  }, [selectedChat?._id]);
 
   // Debug: Log selectedChat structure when changed to help troubleshoot @mentions
   useEffect(() => {
@@ -941,6 +1058,93 @@ const ChatInterface = () => {
   const handleReply = (message) => setReplyingTo(message);
   const cancelReply = () => setReplyingTo(null);
 
+  const toggleMuteChannel = async () => {
+    if (!selectedChat?._id || !token) return;
+
+    const channelId = String(selectedChat._id);
+    const isMuted = mutedChannelIds.includes(channelId);
+    const nextMutedChannelIds = isMuted
+      ? mutedChannelIds.filter((id) => id !== channelId)
+      : [...mutedChannelIds, channelId];
+
+    setMutedChannelIds(nextMutedChannelIds);
+
+    try {
+      await notificationService.updatePreferences(token, {
+        muted_channels: nextMutedChannelIds,
+      });
+      toast.success(isMuted ? "Chat unmuted" : "Chat muted");
+    } catch (error) {
+      setMutedChannelIds(mutedChannelIds);
+      toast.error("Failed to update mute setting");
+    }
+  };
+
+  const openForwardModal = (message) => {
+    setMessageToForward(message);
+    setForwardSearchQuery("");
+    setShowForwardModal(true);
+  };
+
+  const closeForwardModal = () => {
+    setShowForwardModal(false);
+    setMessageToForward(null);
+    setForwardSearchQuery("");
+  };
+
+  const getForwardContent = (message) => {
+    if (!message) return "";
+    if (message.message_type === "file") {
+      return message.file_url
+        ? `Forwarded file: ${message.file_name || "Attachment"}\n${message.file_url}`
+        : `Forwarded file: ${message.file_name || "Attachment"}`;
+    }
+    if (message.message_type === "call") {
+      return `Forwarded message: ${message.content || "Call activity"}`;
+    }
+    return message.content || "";
+  };
+
+  const forwardMessageToChat = async (targetChat) => {
+    if (!targetChat?._id || !messageToForward) return;
+
+    const forwardedContent = getForwardContent(messageToForward).trim();
+    if (!forwardedContent) {
+      toast.error("Only text and file messages can be forwarded right now");
+      return;
+    }
+
+    setForwardingMessage(true);
+
+    try {
+      if (targetChat.channel_type === "direct") {
+        await axios.post(
+          `${BACKEND_URL}/direct_chat/channels/${targetChat._id}/messages`,
+          { content: forwardedContent },
+          axiosConfig
+        );
+      } else {
+        await axios.post(
+          `${BACKEND_URL}/chat/messages`,
+          {
+            channel_id: targetChat._id,
+            content: forwardedContent,
+          },
+          axiosConfig
+        );
+      }
+
+      toast.success("Message forwarded");
+      closeForwardModal();
+      await fetchDirectChats();
+      await getUserChannel();
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Failed to forward message");
+    } finally {
+      setForwardingMessage(false);
+    }
+  };
+
   const handleDeleteMessage = async (messageId) => {
     try {
       await axios.delete(
@@ -1231,17 +1435,34 @@ const ChatInterface = () => {
     if (!newMessage.trim() || !selectedChat || sendingMessage) return;
     const messageContent = newMessage.trim();
     const parentMessageId = replyingTo?._id || null;
+    const draftStorageKey = getDraftStorageKey(selectedChat._id);
     setNewMessage("");
     setReplyingTo(null);
     setSendingMessage(true);
+    localStorage.removeItem(draftStorageKey);
+    if (socket && selectedChat?._id) {
+      socket.emit("channel-typing-stop", {
+        channelId: selectedChat._id,
+      });
+    }
     try {
       const payload = { content: messageContent };
       if (parentMessageId) payload.parent_message_id = parentMessageId;
-      const response = await axios.post(
-        `${BACKEND_URL}/direct_chat/channels/${selectedChat._id}/messages`,
-        payload,
-        axiosConfig,
-      );
+      const response =
+        selectedChat.channel_type === "group"
+          ? await axios.post(
+              `${BACKEND_URL}/chat/messages`,
+              {
+                channel_id: selectedChat._id,
+                ...payload,
+              },
+              axiosConfig,
+            )
+          : await axios.post(
+              `${BACKEND_URL}/direct_chat/channels/${selectedChat._id}/messages`,
+              payload,
+              axiosConfig,
+            );
       if (response.data.data) {
         // Use functional updater with dedup to avoid overwriting
         // messages that arrived via socket while the request was in-flight
@@ -1256,9 +1477,12 @@ const ChatInterface = () => {
     } catch (error) {
       console.error("Error sending message:", error);
       setNewMessage(messageContent);
+      localStorage.setItem(draftStorageKey, messageContent);
       if (parentMessageId)
         setReplyingTo(messages.find((m) => m._id === parentMessageId));
       toast.error("Failed to send message. Please try again.");
+    } finally {
+      setSendingMessage(false);
     }
   };
 
@@ -1268,6 +1492,19 @@ const ChatInterface = () => {
       minute: "2-digit",
       hour12: true,
     });
+
+  const getDraftStorageKey = (channelId) => `chat-draft:${channelId}`;
+
+  const scrollToMessageById = (messageId) => {
+    if (!messageId) return;
+    const messageEl =
+      messageRefs.current[messageId] ||
+      document.getElementById(`message-${messageId}`);
+    messageEl?.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+  };
 
   const formatDateSeparator = (date) => {
     const msgDate = new Date(date);
@@ -1645,12 +1882,46 @@ const ChatInterface = () => {
       });
     };
 
+    const handleChannelAvatarUpdate = (data) => {
+      const { channel_id, avatar_url } = data;
+      const applyAvatarUpdate = (chat) =>
+        chat._id === channel_id ? { ...chat, avatar_url } : chat;
+
+      setUserChannel((prev) => prev.map(applyAvatarUpdate));
+      setDirectChats((prev) => prev.map(applyAvatarUpdate));
+      setSelectedChat((prev) =>
+        prev && prev._id === channel_id ? { ...prev, avatar_url } : prev
+      );
+    };
+
     const handleNewGroup = (data) => {
       console.log("handleNewGroup", data);
       setUserChannel((prev) => {
         if (prev.some((ch) => ch._id === data._id)) return prev;
         return [data, ...prev];
       });
+    };
+
+    const handleChannelUserTyping = ({ channelId, userId, userName }) => {
+      if (String(selectedChatRef.current?._id) !== String(channelId)) return;
+      if (String(userId) === String(user?.id || user?._id)) return;
+
+      setTypingUsers((prev) => {
+        const nextUsers = prev.filter(
+          (typingUser) => String(typingUser.userId) !== String(userId)
+        );
+        return [...nextUsers, { userId, userName }];
+      });
+    };
+
+    const handleChannelUserStoppedTyping = ({ channelId, userId }) => {
+      if (String(selectedChatRef.current?._id) !== String(channelId)) return;
+
+      setTypingUsers((prev) =>
+        prev.filter(
+          (typingUser) => String(typingUser.userId) !== String(userId)
+        )
+      );
     };
 
     const handleMessageDeleted = (data) => {
@@ -1672,6 +1943,7 @@ const ChatInterface = () => {
     };
 
     socket.on("channel_name_changed", handleChannelNameUpdate);
+    socket.on("channel_avatar_changed", handleChannelAvatarUpdate);
     socket.on("direct_chat_created", handleNewChat);
     socket.on("group_created", handleNewGroup);
     socket.on("new_message", appendMessage);
@@ -1680,6 +1952,8 @@ const ChatInterface = () => {
     socket.on("online-users-updated", handleOnlineUsersUpdate);
     socket.on("message_deleted", handleMessageDeleted);
     socket.on("conversation_cleared", handleConversationCleared);
+    socket.on("channel-user-typing", handleChannelUserTyping);
+    socket.on("channel-user-stopped-typing", handleChannelUserStoppedTyping);
 
     const handleReaction = (data) => {
       const currentChat = selectedChatRef.current;
@@ -1804,8 +2078,14 @@ const ChatInterface = () => {
       socket.off("leavechannel", handleLeaveChannel);
       socket.off("online-users-updated", handleOnlineUsersUpdate);
       socket.off("channel_name_changed", handleChannelNameUpdate);
+      socket.off("channel_avatar_changed", handleChannelAvatarUpdate);
       socket.off("message_deleted", handleMessageDeleted);
       socket.off("conversation_cleared", handleConversationCleared);
+      socket.off("channel-user-typing", handleChannelUserTyping);
+      socket.off(
+        "channel-user-stopped-typing",
+        handleChannelUserStoppedTyping
+      );
       socket.off("message_reaction", handleReaction);
       socket.off("message:starred", handleMessageStarred);
       socket.off("message:pinned", handleMessagePinned);
@@ -1885,6 +2165,33 @@ const ChatInterface = () => {
     );
   }, [directChats, userChannel, activeTab, chatSearchQuery]);
 
+  const allUniqueChats = useMemo(() => {
+    const allChats = [...directChats, ...userChannel].filter(Boolean);
+    return allChats.filter(
+      (chat, index, self) =>
+        chat?._id && index === self.findIndex((c) => c?._id === chat._id),
+    );
+  }, [directChats, userChannel]);
+
+  const forwardableChats = useMemo(() => {
+    const query = forwardSearchQuery.trim().toLowerCase();
+
+    return sortChatsByLastMessage(allUniqueChats).filter((chat) => {
+      if (!messageToForward || String(chat._id) === String(selectedChat?._id)) {
+        return false;
+      }
+
+      if (!query) return true;
+
+      const displayName =
+        chat.channel_type === "direct"
+          ? chat.other_user?.full_name || ""
+          : chat.name || "";
+
+      return displayName.toLowerCase().includes(query);
+    });
+  }, [allUniqueChats, forwardSearchQuery, messageToForward, selectedChat?._id]);
+
   const chatCounts = useMemo(() => {
     const allChats = [...directChats, ...userChannel].filter(Boolean);
     const uniqueChats = allChats.filter(
@@ -1926,27 +2233,47 @@ const ChatInterface = () => {
       }`,
       initials: chat.name?.[0] || "G",
       isGroup: true,
-      profile_picture: null,
+      profile_picture: chat.avatar_url || null,
     };
   };
 
   const getConversationPreview = (chat = {}) => {
+    const draftPreview = draftsByChannel[chat?._id];
+    if (draftPreview?.trim()) {
+      return {
+        text: draftPreview.trim(),
+        isDraft: true,
+      };
+    }
+
     const message = chat.last_message;
 
     if (!message) {
-      return chat.channel_type === "group"
-        ? "No messages yet. Start the team conversation."
-        : "No messages yet. Say hello to begin.";
+      return {
+        text:
+          chat.channel_type === "group"
+            ? "No messages yet. Start the team conversation."
+            : "No messages yet. Say hello to begin.",
+        isDraft: false,
+      };
     }
 
-    if (message.message_type === "file") return "File shared";
+    if (message.message_type === "file")
+      return { text: "File shared", isDraft: false };
     if (message.message_type === "call") {
-      return message.call_log?.call_type === "video"
-        ? "Video call activity"
-        : "Audio call activity";
+      return {
+        text:
+          message.call_log?.call_type === "video"
+            ? "Video call activity"
+            : "Audio call activity",
+        isDraft: false,
+      };
     }
 
-    return message.content || "New activity";
+    return {
+      text: message.content || "New activity",
+      isDraft: false,
+    };
   };
 
   const getConversationTimestamp = (chat = {}) => {
@@ -2069,10 +2396,12 @@ const ChatInterface = () => {
           ) : (
             displayedChats.map((chat) => {
               const displayInfo = getChatDisplayInfo(chat);
+              const preview = getConversationPreview(chat);
               const userOnline =
                 chat.channel_type === "direct" &&
                 isUserOnline(chat.other_user?._id);
               const isActive = selectedChat?._id === chat._id;
+              const isMuted = mutedChannelIds.includes(String(chat._id));
               return (
                 <div
                   key={
@@ -2094,7 +2423,15 @@ const ChatInterface = () => {
                       }`}
                     >
                       {displayInfo.isGroup ? (
-                        <Users className="w-4 h-4" />
+                        displayInfo.profile_picture ? (
+                          <img
+                            src={displayInfo.profile_picture}
+                            alt={displayInfo.name}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <Users className="w-4 h-4" />
+                        )
                       ) : displayInfo.profile_picture ? (
                         <img
                           src={displayInfo.profile_picture}
@@ -2143,12 +2480,14 @@ const ChatInterface = () => {
                     <div className="mt-2 flex items-center gap-2">
                       <p
                         className={`text-xs truncate flex-1 ${
-                          chat.unread_count > 0
+                          preview.isDraft
+                            ? "text-amber-300"
+                            : chat.unread_count > 0
                             ? "text-zinc-200 font-medium"
                             : "text-zinc-500"
                         }`}
                       >
-                        {getConversationPreview(chat)}
+                        {preview.isDraft ? `Draft: ${preview.text}` : preview.text}
                       </p>
                       {chat.unread_count > 0 && (
                         <span className="px-1.5 py-0.5 bg-indigo-600 text-white text-[10px] rounded-full font-semibold min-w-[18px] text-center">
@@ -2161,6 +2500,12 @@ const ChatInterface = () => {
                         <span className="inline-flex items-center gap-1 rounded-full bg-zinc-800 px-2 py-0.5 text-[10px] text-zinc-400">
                           <Users className="h-3 w-3" />
                           {displayInfo.subtitle}
+                        </span>
+                      )}
+                      {isMuted && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                          <VolumeX className="h-3 w-3" />
+                          Muted
                         </span>
                       )}
                       {!displayInfo.isGroup &&
@@ -2200,14 +2545,22 @@ const ChatInterface = () => {
               <div className="flex items-center gap-3">
                 <div className="relative">
                   <div
-                    className={`w-9 h-9 rounded-full flex items-center justify-center font-medium text-xs overflow-hidden ${
-                      selectedChat.channel_type === "group"
-                        ? "bg-zinc-800 text-zinc-400"
-                        : "bg-indigo-500/20 text-indigo-300"
-                    }`}
-                  >
+                  className={`w-9 h-9 rounded-full flex items-center justify-center font-medium text-xs overflow-hidden ${
+                    selectedChat.channel_type === "group"
+                      ? "bg-zinc-800 text-zinc-400"
+                      : "bg-indigo-500/20 text-indigo-300"
+                  }`}
+                >
                     {selectedChat.channel_type === "group" ? (
-                      <Users className="w-4 h-4" />
+                      selectedChat.avatar_url ? (
+                        <img
+                          src={selectedChat.avatar_url}
+                          alt={selectedChat.name || "Group avatar"}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <Users className="w-4 h-4" />
+                      )
                     ) : selectedChat.other_user?.profile_picture ? (
                       <img
                         src={selectedChat.other_user.profile_picture}
@@ -2236,11 +2589,22 @@ const ChatInterface = () => {
                   </h3>
                   <p className="text-xs">
                     {selectedChat.channel_type === "group" ? (
-                      <span className="text-zinc-500">{`${selectedChat.member_count || 0} members${
-                        selectedChat.department
-                          ? ` | ${selectedChat.department?.name || ""}`
-                          : ""
-                      }`}</span>
+                      typingUsers.length > 0 ? (
+                        <span className="text-emerald-400">
+                          {typingUsers.map((typingUser) => typingUser.userName).join(", ")}{" "}
+                          {typingUsers.length === 1 ? "is" : "are"} typing...
+                        </span>
+                      ) : (
+                        <span className="text-zinc-500">{`${selectedChat.member_count || 0} members${
+                          selectedChat.department
+                            ? ` | ${selectedChat.department?.name || ""}`
+                            : ""
+                        }`}</span>
+                      )
+                    ) : typingUsers.length > 0 ? (
+                      <span className="text-emerald-400">
+                        {typingUsers[0]?.userName || "Someone"} is typing...
+                      </span>
                     ) : isUserOnline(selectedChat.other_user?._id) ? (
                       <span className="text-emerald-400 flex items-center gap-1">
                         <span className="inline-block w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />
@@ -2254,6 +2618,25 @@ const ChatInterface = () => {
               </div>
 
               <div className="flex items-center gap-1">
+                <button
+                  onClick={toggleMuteChannel}
+                  className={`p-1.5 rounded-lg transition-all ${
+                    mutedChannelIds.includes(String(selectedChat?._id))
+                      ? "bg-amber-500/10 text-amber-400"
+                      : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                  }`}
+                  title={
+                    mutedChannelIds.includes(String(selectedChat?._id))
+                      ? "Unmute chat"
+                      : "Mute chat"
+                  }
+                >
+                  {mutedChannelIds.includes(String(selectedChat?._id)) ? (
+                    <VolumeX className="w-4 h-4" />
+                  ) : (
+                    <Volume2 className="w-4 h-4" />
+                  )}
+                </button>
                 {/* Search Button */}
                 <button
                   onClick={() => setShowMessageSearch(!showMessageSearch)}
@@ -2842,6 +3225,9 @@ const ChatInterface = () => {
                         <div
                           id={`message-${message._id}`}
                           ref={(el) => {
+                            if (el) {
+                              messageRefs.current[message._id] = el;
+                            }
                             if (isSearchResult) {
                               searchedMessageRefs.current[message._id] = el;
                             }
@@ -2866,12 +3252,16 @@ const ChatInterface = () => {
                             >
                               {/* Rest of your existing message rendering... */}
                               {parentMessage && (
-                                <div
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    scrollToMessageById(parentMessage._id)
+                                  }
                                   className={`mb-1.5 pl-2.5 border-l-2 ${
                                     message.is_own
                                       ? "border-white/40"
                                       : "border-indigo-400"
-                                  } py-0.5`}
+                                  } py-0.5 text-left w-full hover:opacity-90 transition-opacity`}
                                 >
                                   <p
                                     className={`text-[11px] font-medium ${
@@ -2894,7 +3284,7 @@ const ChatInterface = () => {
                                   >
                                     {parentMessage.content}
                                   </p>
-                                </div>
+                                </button>
                               )}
                               {!message.is_own &&
                                 selectedChat.channel_type === "group" && (
@@ -3044,6 +3434,13 @@ const ChatInterface = () => {
                                 title="Reply"
                               >
                                 <Reply className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => openForwardModal(message)}
+                                className="p-1 hover:bg-zinc-800 rounded text-zinc-500 hover:text-zinc-300 transition-colors"
+                                title="Forward"
+                              >
+                                <Forward className="w-3.5 h-3.5" />
                               </button>
                               {/* Star button - available to all */}
                               <button
@@ -3345,7 +3742,13 @@ const ChatInterface = () => {
             <div className="px-4 py-3 border-b border-zinc-800/60 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Eye className="w-4 h-4 text-indigo-400" />
-                <h3 className="text-sm font-semibold text-zinc-100">Seen by</h3>
+                <div>
+                  <h3 className="text-sm font-semibold text-zinc-100">Seen by</h3>
+                  <p className="text-[11px] text-zinc-500">
+                    {selectedMessageSeenBy.seen_by?.length || 0} member
+                    {(selectedMessageSeenBy.seen_by?.length || 0) === 1 ? "" : "s"} viewed this message
+                  </p>
+                </div>
               </div>
               <Button
                 variant="ghost"
@@ -3358,11 +3761,19 @@ const ChatInterface = () => {
             </div>
             <div className="flex-1 overflow-y-auto p-3">
               {selectedMessageSeenBy.seen_by?.length > 0 ? (
-                <div className="space-y-1">
+                <div className="space-y-2">
+                  <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2">
+                    <p className="text-[11px] font-medium text-zinc-300">
+                      Seen
+                    </p>
+                    <p className="mt-1 text-[10px] text-zinc-500">
+                      Everyone listed below has already opened this message.
+                    </p>
+                  </div>
                   {selectedMessageSeenBy.seen_by.map((seen, index) => (
                     <div
                       key={index}
-                      className="flex items-center gap-2.5 p-2 rounded-lg hover:bg-zinc-800/50"
+                      className="flex items-center gap-2.5 rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2.5 hover:bg-zinc-800/50"
                     >
                       <div className="w-7 h-7 rounded-full bg-indigo-500/20 flex items-center justify-center flex-shrink-0">
                         <span className="text-indigo-300 font-medium text-[10px]">
@@ -3385,6 +3796,9 @@ const ChatInterface = () => {
                           })}
                         </p>
                       </div>
+                      <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-300">
+                        Seen
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -3448,6 +3862,75 @@ const ChatInterface = () => {
         isSearching={isSearching}
         roleUpdateTrigger={roleUpdateTrigger}
       />
+
+      {showForwardModal && messageToForward && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="flex max-h-[32rem] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-zinc-700/60 bg-zinc-900 shadow-2xl">
+            <div className="border-b border-zinc-700/60 px-4 py-3">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-zinc-100">
+                  Forward Message
+                </h3>
+                <button
+                  onClick={closeForwardModal}
+                  className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="mb-3 rounded-lg border border-zinc-700/50 bg-zinc-800/70 p-3 text-xs text-zinc-300">
+                {getForwardContent(messageToForward)}
+              </div>
+              <Input
+                value={forwardSearchQuery}
+                onChange={(e) => setForwardSearchQuery(e.target.value)}
+                placeholder="Search chats..."
+                className="bg-zinc-800/80 border-zinc-700 text-zinc-100"
+              />
+            </div>
+            <div className="flex-1 space-y-2 overflow-y-auto p-4">
+              {forwardableChats.length > 0 ? (
+                forwardableChats.map((chat) => {
+                  const displayInfo = getChatDisplayInfo(chat);
+
+                  return (
+                    <button
+                      key={chat._id}
+                      onClick={() => forwardMessageToChat(chat)}
+                      disabled={forwardingMessage}
+                      className="flex w-full items-center gap-3 rounded-xl border border-zinc-700/50 bg-zinc-800/60 px-3 py-3 text-left transition hover:border-zinc-600 hover:bg-zinc-800 disabled:opacity-50"
+                    >
+                      <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl bg-indigo-500/20 text-indigo-300">
+                        {displayInfo.profile_picture ? (
+                          <img
+                            src={displayInfo.profile_picture}
+                            alt={displayInfo.name}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : displayInfo.isGroup ? (
+                          <Users className="h-4 w-4" />
+                        ) : (
+                          displayInfo.initials
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-zinc-100">
+                          {displayInfo.name}
+                        </p>
+                        <p className="truncate text-xs text-zinc-500">
+                          {displayInfo.isGroup ? "Group chat" : "Direct chat"}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })
+              ) : (
+                <p className="text-sm text-zinc-500">No chats found</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {renderCallModals && audioCall.callState === "incoming" && (
         <IncomingCallModal

@@ -205,6 +205,28 @@ function getTimeInputValueInTimeZone(date, timeZone) {
   return `${hour}:${minute}`;
 }
 
+function areMeetingParticipantsEqual(prev = [], next = []) {
+  if (prev === next) return true;
+  if (prev.length !== next.length) return false;
+
+  for (let i = 0; i < prev.length; i += 1) {
+    const a = prev[i] || {};
+    const b = next[i] || {};
+    if (
+      String(a.userId || "") !== String(b.userId || "") ||
+      String(a.name || "") !== String(b.name || "") ||
+      !!a.isMuted !== !!b.isMuted ||
+      !!a.isVideoOff !== !!b.isVideoOff ||
+      !!a.handRaised !== !!b.handRaised ||
+      !!a.screenSharing !== !!b.screenSharing
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 const STATUS_FILTERS = [
   { value: "all", label: "All" },
   { value: "scheduled", label: "Upcoming" },
@@ -2280,7 +2302,14 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
     const handleParticipants = (payload) => {
       const currentMeetingId = activeMeetingIdRef.current;
       if (!currentMeetingId || String(payload.meetingId) !== currentMeetingId) return;
-      setRoomParticipants(payload.participants || []);
+      setRoomParticipants((prev) =>
+        areMeetingParticipantsEqual(prev, payload.participants || [])
+          ? prev
+          : payload.participants || []
+      );
+      if (typeof meetingCall.setRemoteParticipantStates === "function") {
+        meetingCall.setRemoteParticipantStates(payload.participants || []);
+      }
     };
 
     const handleMessage = (payload) => {
@@ -2876,10 +2905,8 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
     if (!isHost(meeting)) return false;
     if (!meeting.scheduled_at) return true; // no scheduled time, host can start anytime
     const start = new Date(meeting.scheduled_at).getTime();
-    const fiveMinutesMs = 5 * 60 * 1000;
-    // Host can only start between scheduled time and 5 minutes after
     // nowTick ensures this re-evaluates periodically without a page refresh
-    return nowTick >= start && nowTick < start + fiveMinutesMs;
+    return nowTick >= start;
   };
 
   // ---- Enter / Leave meeting room ----

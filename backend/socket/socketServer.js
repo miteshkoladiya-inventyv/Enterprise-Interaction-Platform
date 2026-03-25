@@ -27,6 +27,15 @@ const activeMeetings = {};
 const activeMeetingRecordingState = {};
 // Lobby for meetings with open_to_everyone=false: meetingId -> [{ userId, name, socketId }]
 const meetingLobby = {};
+const serializeMeetingParticipants = (room = {}) =>
+  Object.entries(room).map(([userId, info]) => ({
+    userId,
+    name: info.name,
+    isMuted: !!info.isMuted,
+    isVideoOff: !!info.isVideoOff,
+    handRaised: !!info.handRaised,
+    screenSharing: !!info.screenSharing,
+  }));
 // NEW â"€ Track active document sessions: docId -> { [userId]: { name, color, socketId }, _latestContent?, _version? }
 const activeDocuments = {};
 
@@ -407,12 +416,7 @@ io.on("connection", async (socket) => {
     socket.join(`meeting:${key}`);
     socket.meetingIds.add(key);
 
-    const participants = Object.entries(activeMeetings[key]).map(
-      ([userId, info]) => ({
-        userId,
-        name: info.name,
-      })
-    );
+    const participants = serializeMeetingParticipants(activeMeetings[key]);
 
     io.to(`meeting:${key}`).emit("meeting-participants", {
       meetingId: key,
@@ -470,10 +474,7 @@ io.on("connection", async (socket) => {
     socket.leave(`meeting:${key}`);
     socket.meetingIds.delete(key);
 
-    const participants = Object.entries(room).map(([userId, info]) => ({
-      userId,
-      name: info.name,
-    }));
+    const participants = serializeMeetingParticipants(room);
 
     if (participants.length === 0) {
       delete activeMeetings[key];
@@ -1676,10 +1677,7 @@ io.on("connection", async (socket) => {
             const room = activeMeetings[meetingId];
             if (!room) return;
             delete room[normalizedUserId];
-            const participants = Object.entries(room).map(([userId, info]) => ({
-              userId,
-              name: info.name,
-            }));
+            const participants = serializeMeetingParticipants(room);
             if (participants.length === 0) {
               delete activeMeetings[meetingId];
               delete activeMeetingRecordingState[meetingId];

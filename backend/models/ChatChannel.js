@@ -11,6 +11,10 @@ const chatChannelSchema = new Schema(
       type: String,
       trim: true,
     },
+    avatar_url: {
+      type: String,
+      default: null,
+    },
     country_restriction: {
       type: String,
       enum: ["germany", "india", "usa"],

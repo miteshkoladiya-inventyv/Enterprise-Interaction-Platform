@@ -415,6 +415,8 @@ export const updateMeeting = async (req, res) => {
       "location",
       "join_link",
       "status",
+      "started_at",
+      "ended_at",
       "reminders",
       "open_to_everyone",
     ];
@@ -660,4 +662,3 @@ export const deleteMeeting = async (req, res) => {
     return res.status(500).json({ error: "Failed to delete meeting" });
   }
 };
-

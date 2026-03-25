@@ -569,6 +569,68 @@ export function useMeetingCall(socket, currentUserId, currentUserName, meetingId
     }
   }, [currentUserIdStr, handRaised, meetingId, socket]);
 
+  const setRemoteParticipantStates = useCallback((participants = []) => {
+    const nextStates = {};
+    let activeScreenSharerId = null;
+
+    participants.forEach((participant) => {
+      const uid = String(participant?.userId);
+      if (!uid || uid === currentUserIdStr) return;
+
+      nextStates[uid] = {
+        ...(nextStates[uid] || {}),
+        name: participant?.name || "User",
+        isMuted: !!participant?.isMuted,
+        isVideoOff: !!participant?.isVideoOff,
+        handRaised: !!participant?.handRaised,
+      };
+
+      if (participant?.screenSharing) {
+        activeScreenSharerId = uid;
+      }
+    });
+
+    setRemoteMediaStates((prev) => {
+      const merged = { ...prev };
+      let hasChanges = false;
+
+      Object.keys(merged).forEach((uid) => {
+        if (!nextStates[uid]) {
+          delete merged[uid];
+          hasChanges = true;
+        }
+      });
+
+      Object.entries(nextStates).forEach(([uid, state]) => {
+        const previousState = merged[uid] || {};
+        const nextState = {
+          ...previousState,
+          ...state,
+        };
+
+        if (
+          previousState.name !== nextState.name ||
+          previousState.isMuted !== nextState.isMuted ||
+          previousState.isVideoOff !== nextState.isVideoOff ||
+          previousState.handRaised !== nextState.handRaised
+        ) {
+          hasChanges = true;
+        }
+
+        merged[uid] = nextState;
+      });
+
+      return hasChanges ? merged : prev;
+    });
+
+    setScreenShareUserId((prev) =>
+      prev ===
+      (activeScreenSharerId || (String(prev) === String(currentUserIdStr) ? prev : null))
+        ? prev
+        : activeScreenSharerId || (String(prev) === String(currentUserIdStr) ? prev : null)
+    );
+  }, [currentUserIdStr]);
+
   const buildRecordingStream = useCallback(() => {
     releaseRecordingRenderResources();
 
@@ -953,5 +1015,6 @@ export function useMeetingCall(socket, currentUserId, currentUserName, meetingId
     toggleVideo,
     toggleScreenShare,
     toggleHandRaise,
+    setRemoteParticipantStates,
   };
 }

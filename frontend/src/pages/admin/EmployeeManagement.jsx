@@ -95,6 +95,16 @@ const TIMEZONES = [
   { value: "Australia/Sydney", label: "Sydney (AEDT)" },
 ];
 
+const SHIFT_OPTIONS = [
+  { value: "day", label: "Day Shift (10 AM - 7 PM)" },
+  { value: "night", label: "Night Shift (7 PM - 4 AM)" },
+];
+
+const SHIFT_BADGE_CLASSES = {
+  day: "border-sky-500/20 bg-sky-500/10 text-sky-300",
+  night: "border-violet-500/20 bg-violet-500/10 text-violet-300",
+};
+
 const POSITION_LABELS = {
   ceo: "CEO",
   cto: "CTO",
@@ -118,6 +128,7 @@ const initialFormData = {
   phone: "",
   country: "",
   timezone: "",
+  shift_type: "",
   employee_type: "internal_team",
   department: "",
   position: "",
@@ -133,6 +144,7 @@ export default function EmployeeManagement() {
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [filterDepartment, setFilterDepartment] = useState("all");
+  const [filterShift, setFilterShift] = useState("all");
   const [viewMode, setViewMode] = useState("list"); // "list" | "create"
   const [editingEmployee, setEditingEmployee] = useState(null);
   const [passwordModalEmployee, setPasswordModalEmployee] = useState(null);
@@ -160,6 +172,7 @@ export default function EmployeeManagement() {
     formData.employee_type === "internal_team" &&
     formData.position &&
     positionsRequiringTeamLead.includes(formData.position);
+  const shouldShowShift = formData.country === "india";
 
   const getPageNumbers = () => {
     const pages = [];
@@ -186,7 +199,7 @@ export default function EmployeeManagement() {
   // Reset page on department filter change
   useEffect(() => {
     setCurrentPage(1);
-  }, [filterDepartment]);
+  }, [filterDepartment, filterShift]);
 
   // Fetch employees with server-side pagination
   const fetchEmployees = useCallback(async () => {
@@ -198,6 +211,7 @@ export default function EmployeeManagement() {
       });
       if (debouncedSearch) params.append("search", debouncedSearch);
       if (filterDepartment && filterDepartment !== "all") params.append("department", filterDepartment);
+      if (filterShift && filterShift !== "all") params.append("shift_type", filterShift);
 
       const { data } = await axios.get(`${BACKEND_URL}/employees/?${params.toString()}`, {
         headers: getAuthHeaders(),
@@ -217,7 +231,7 @@ export default function EmployeeManagement() {
       setLoading(false);
       setFetching(false);
     }
-  }, [currentPage, itemsPerPage, debouncedSearch, filterDepartment]);
+  }, [currentPage, itemsPerPage, debouncedSearch, filterDepartment, filterShift]);
 
   const fetchTeamLeads = async () => {
     try {
@@ -273,6 +287,12 @@ export default function EmployeeManagement() {
         department: "",
         team_lead_id: "",
       }));
+    } else if (name === "country") {
+      setFormData((prev) => ({
+        ...prev,
+        country: value,
+        shift_type: value === "india" ? prev.shift_type : "",
+      }));
     } else {
       setFormData((prev) => ({ ...prev, [name]: value }));
     }
@@ -286,6 +306,8 @@ export default function EmployeeManagement() {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(formData.email)) return "Invalid email address";
     if (!formData.country) return "Country is required";
+    if (formData.country === "india" && !formData.shift_type)
+      return "Shift is required for employees in India";
     if (!formData.hire_date) return "Hire date is required";
     if (formData.employee_type === "internal_team") {
       if (!formData.position) return "Position is required";
@@ -313,6 +335,7 @@ export default function EmployeeManagement() {
         phone: formData.phone,
         country: formData.country,
         timezone: formData.timezone,
+        shift_type: formData.country === "india" ? formData.shift_type : null,
         employee_type: formData.employee_type,
         hire_date: formData.hire_date,
       };
@@ -345,6 +368,7 @@ export default function EmployeeManagement() {
       phone: emp.user_id?.phone || "",
       country: emp.user_id?.country || "",
       timezone: emp.user_id?.timezone || "",
+      shift_type: emp.shift_type || "",
       employee_type: emp.employee_type || "internal_team",
       department: emp.department?._id || emp.department || "",
       position: emp.position || "",
@@ -372,6 +396,7 @@ export default function EmployeeManagement() {
         phone: formData.phone,
         country: formData.country,
         timezone: formData.timezone,
+        shift_type: formData.country === "india" ? formData.shift_type : null,
         employee_type: formData.employee_type,
         department: formData.department || undefined,
         position: formData.position || undefined,
@@ -585,6 +610,27 @@ export default function EmployeeManagement() {
                 </select>
               </div>
             </div>
+            {shouldShowShift && (
+              <div>
+                <label className={labelClasses}>Shift *</label>
+                <select
+                  name="shift_type"
+                  value={formData.shift_type}
+                  onChange={handleFormChange}
+                  className={selectClasses}
+                >
+                  <option value="">Select Shift</option>
+                  {SHIFT_OPTIONS.map((shift) => (
+                    <option key={shift.value} value={shift.value}>
+                      {shift.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  India employees must be assigned either day or night shift.
+                </p>
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className={labelClasses}>Timezone</label>
@@ -719,7 +765,7 @@ export default function EmployeeManagement() {
           {/* Filters */}
           <Card className="mb-5">
             <CardContent className="p-4">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <div className="relative">
                   <Search className="absolute left-3 inset-y-0 my-auto size-4 text-muted-foreground" />
                   <Input
@@ -740,6 +786,15 @@ export default function EmployeeManagement() {
                       {dept.name}
                     </option>
                   ))}
+                </select>
+                <select
+                  value={filterShift}
+                  onChange={(e) => setFilterShift(e.target.value)}
+                  className={selectClasses}
+                >
+                  <option value="all">All Shifts</option>
+                  <option value="day">Day Shift</option>
+                  <option value="night">Night Shift</option>
                 </select>
               </div>
             </CardContent>
@@ -773,6 +828,9 @@ export default function EmployeeManagement() {
                         </th>
                         <th className="px-5 py-3.5 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
                           Position
+                        </th>
+                        <th className="px-5 py-3.5 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
+                          Shift
                         </th>
                         <th className="px-5 py-3.5 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
                           Team Lead
@@ -824,6 +882,20 @@ export default function EmployeeManagement() {
                             </td>
                             <td className="px-5 py-3 text-sm text-zinc-400">
                               {POSITION_LABELS[employee?.position] || employee?.position || "—"}
+                            </td>
+                            <td className="px-5 py-3 text-sm text-zinc-400">
+                              {employee?.shift_type ? (
+                                <span
+                                  className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-medium ${
+                                    SHIFT_BADGE_CLASSES[employee.shift_type] ||
+                                    "border-zinc-700 bg-zinc-800 text-zinc-300"
+                                  }`}
+                                >
+                                  {employee.shift_type === "night" ? "Night" : "Day"}
+                                </span>
+                              ) : (
+                                "—"
+                              )}
                             </td>
                             <td className="px-5 py-3 text-sm text-zinc-400">
                               {teamLeadName}
@@ -933,6 +1005,23 @@ export default function EmployeeManagement() {
                             <span className="text-zinc-500">Position</span>
                             <p className="font-medium text-zinc-300">
                               {employee?.position}
+                            </p>
+                          </div>
+                          <div>
+                            <span className="text-zinc-500">Shift</span>
+                            <p className="font-medium text-zinc-300">
+                              {employee?.shift_type ? (
+                                <span
+                                  className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-medium ${
+                                    SHIFT_BADGE_CLASSES[employee.shift_type] ||
+                                    "border-zinc-700 bg-zinc-800 text-zinc-300"
+                                  }`}
+                                >
+                                  {employee.shift_type === "night" ? "Night" : "Day"}
+                                </span>
+                              ) : (
+                                "—"
+                              )}
                             </p>
                           </div>
                           <div>
@@ -1150,6 +1239,24 @@ export default function EmployeeManagement() {
                   </select>
                 </div>
               </div>
+              {shouldShowShift && (
+                <div>
+                  <label className={labelClasses}>Shift *</label>
+                  <select
+                    name="shift_type"
+                    value={formData.shift_type}
+                    onChange={handleFormChange}
+                    className={selectClasses}
+                  >
+                    <option value="">Select Shift</option>
+                    {SHIFT_OPTIONS.map((shift) => (
+                      <option key={shift.value} value={shift.value}>
+                        {shift.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className={labelClasses}>Timezone</label>
@@ -1374,3 +1481,4 @@ export default function EmployeeManagement() {
     </div>
   );
 }
+

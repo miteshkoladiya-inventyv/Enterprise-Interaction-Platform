@@ -9,6 +9,7 @@ import {
   leaveChannel,
   deleteChannel,
   updateChannelName,
+  updateChannelAvatar,
   searchMessagesInChannel,
 } from "../controllers/chat/chat.controller.js";
 import {
@@ -80,6 +81,13 @@ router.delete("/channels/:id", deleteChannel);
 
 // Update channel name (admin only)
 router.post("/channels/:channelId/name", updateChannelName);
+
+// Update channel avatar (admin only)
+router.post(
+  "/channels/:channelId/avatar",
+  upload.single("avatar"),
+  updateChannelAvatar
+);
 
 // ============ Message Routes ============
 

@@ -127,6 +127,7 @@ export const createChannel = async (req, res) => {
         _id: populatedChannel._id,
         channel_type: populatedChannel.channel_type,
         name: populatedChannel.name,
+        avatar_url: populatedChannel.avatar_url || null,
         department: populatedChannel.department,
         country_restriction: populatedChannel.country_restriction,
         member_count: members.length,
@@ -645,6 +646,69 @@ export const updateChannelName = async (req, res) => {
     }, "Channel name updated successfully");
   } catch (error) {
     console.error("[CHAT] Update channel name error:", error.message);
+    return sendServerError(res, error);
+  }
+};
+
+export const updateChannelAvatar = async (req, res) => {
+  try {
+    const { channelId } = req.params;
+    const userId = req.userId;
+
+    if (!mongoose.Types.ObjectId.isValid(channelId)) {
+      return sendBadRequest(res, "Invalid channel ID");
+    }
+
+    const channel = await ChatChannel.findById(channelId);
+    if (!channel) {
+      return sendError(res, "Channel not found", 404);
+    }
+
+    const membership = await ChannelMember.findOne({
+      channel_id: channelId,
+      user_id: userId,
+    });
+
+    if (!membership) {
+      return sendForbidden(res, "You are not a member of this channel");
+    }
+
+    if (membership.role !== "admin") {
+      return sendForbidden(res, "Only admins can update the channel avatar");
+    }
+
+    if (!req.file?.path) {
+      return sendBadRequest(res, "Channel avatar image is required");
+    }
+
+    channel.avatar_url = req.file.path;
+    await channel.save();
+
+    const channelMembers = await ChannelMember.find({
+      channel_id: channelId,
+    }).select("user_id");
+
+    channelMembers.forEach((member) => {
+      const memberId = member.user_id._id.toString();
+      const socketId = getReceiverSocketId(memberId);
+      if (socketId) {
+        io.to(socketId).emit("channel_avatar_changed", {
+          channel_id: channel._id,
+          avatar_url: channel.avatar_url,
+        });
+      }
+    });
+
+    return sendSuccess(
+      res,
+      {
+        channel_id: channel._id,
+        avatar_url: channel.avatar_url,
+      },
+      "Channel avatar updated successfully"
+    );
+  } catch (error) {
+    console.error("[CHAT] Update channel avatar error:", error.message);
     return sendServerError(res, error);
   }
 };
