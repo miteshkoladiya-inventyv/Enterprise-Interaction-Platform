@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+﻿import { useState, useEffect, useRef, useCallback } from "react";
 import axios from "axios";
 import {
   Send,
@@ -39,6 +39,16 @@ const priorityColors = {
   medium: "bg-blue-100 text-blue-700",
   high: "bg-orange-100 text-orange-700",
   critical: "bg-red-100 text-red-700",
+};
+
+const getCurrentDateTimeLocal = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
 };
 
 function isImageUrl(url) {
@@ -285,6 +295,13 @@ export default function EmployeeTicketView() {
   const handleScheduleMeeting = async (e) => {
     e.preventDefault();
     if (!selectedTicket) return;
+    if (
+      meetingForm.scheduled_at &&
+      new Date(meetingForm.scheduled_at).getTime() < Date.now()
+    ) {
+      toast.error("Please select a current or future date and time");
+      return;
+    }
     setSchedulingMeeting(true);
     try {
       const browserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -762,6 +779,7 @@ export default function EmployeeTicketView() {
                 <Input
                   type="datetime-local"
                   value={meetingForm.scheduled_at}
+                  min={getCurrentDateTimeLocal()}
                   onChange={(e) =>
                     setMeetingForm({ ...meetingForm, scheduled_at: e.target.value })
                   }
@@ -841,7 +859,7 @@ export default function EmployeeTicketView() {
                 <option value="">Select employee...</option>
                 {allEmployees.map((emp) => (
                   <option key={emp._id} value={emp._id}>
-                    {emp.user_id?.first_name} {emp.user_id?.last_name} —{" "}
+                    {emp.user_id?.first_name} {emp.user_id?.last_name} â€”{" "}
                     {emp.department?.name || "N/A"} (
                     {emp.employee_type === "customer_support"
                       ? "Support"
@@ -873,3 +891,4 @@ export default function EmployeeTicketView() {
     </div>
   );
 }
+

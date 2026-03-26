@@ -32,6 +32,37 @@ const urgencyLevelToString = (level) => {
   return mapping[level] || "medium";
 };
 
+const buildTicketAccessContext = async (ticket, user) => {
+  const [customer, employee] = await Promise.all([
+    Customer.findOne({ user_id: user._id }).select("_id"),
+    Employee.findOne({ user_id: user._id }).select("_id"),
+  ]);
+
+  const isAdmin = user.user_type === "admin";
+  const isCustomerOwner =
+    !!customer &&
+    String(ticket.customer_id?._id || ticket.customer_id) === String(customer._id);
+  const isAssignedAgent =
+    !!employee &&
+    String(ticket.assigned_agent_id?._id || ticket.assigned_agent_id) ===
+      String(employee._id);
+  const isCollaborator =
+    !!employee &&
+    (ticket.collaborators || []).some((c) => String(c) === String(employee._id));
+
+  return {
+    customer,
+    employee,
+    isAdmin,
+    isCustomerOwner,
+    isAssignedAgent,
+    isCollaborator,
+    canAccess: isAdmin || isCustomerOwner || isAssignedAgent || isCollaborator,
+    canManage:
+      isAdmin || isAssignedAgent || isCollaborator,
+  };
+};
+
 // Create a new ticket (customer) - with auto-priority calculation and assignment
 export const createTicket = async (req, res) => {
   try {
@@ -188,6 +219,11 @@ export const getTicket = async (req, res) => {
       return res.status(404).json({ error: "Ticket not found" });
     }
 
+    const access = await buildTicketAccessContext(ticket, req.user);
+    if (!access.canAccess) {
+      return res.status(403).json({ error: "Not authorized to view this ticket" });
+    }
+
     res.json({ ticket });
   } catch (error) {
     console.error("Get ticket error:", error);
@@ -216,6 +252,9 @@ export const assignTicket = async (req, res) => {
 
     ticket.assigned_agent_id = employee._id;
     ticket.status = "open";
+    if (!ticket.assigned_at) {
+      ticket.assigned_at = new Date();
+    }
     await ticket.save();
 
     // System message
@@ -256,6 +295,11 @@ export const updateTicketStatus = async (req, res) => {
     const ticket = await SupportTicket.findById(ticketId);
     if (!ticket) {
       return res.status(404).json({ error: "Ticket not found" });
+    }
+
+    const access = await buildTicketAccessContext(ticket, req.user);
+    if (!access.canManage) {
+      return res.status(403).json({ error: "Not authorized to update this ticket" });
     }
 
     const oldStatus = ticket.status;
@@ -332,6 +376,11 @@ export const getInternalEmployees = async (req, res) => {
 // Get all active employees for collaborator selection (assigned agent)
 export const getAllEmployees = async (req, res) => {
   try {
+    const employee = await Employee.findOne({ user_id: req.user._id }).select("_id");
+    if (!employee && req.user.user_type !== "admin") {
+      return res.status(403).json({ error: "Not authorized to view employees" });
+    }
+
     const employees = await Employee.find({ is_active: true })
       .populate("user_id", "first_name last_name email");
 
@@ -554,6 +603,18 @@ export const getTicketMessages = async (req, res) => {
   try {
     const { ticketId } = req.params;
 
+    const ticket = await SupportTicket.findById(ticketId).select(
+      "customer_id assigned_agent_id collaborators"
+    );
+    if (!ticket) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+
+    const access = await buildTicketAccessContext(ticket, req.user);
+    if (!access.canAccess) {
+      return res.status(403).json({ error: "Not authorized to view ticket messages" });
+    }
+
     const messages = await TicketMessage.find({ ticket_id: ticketId })
       .populate("sender_id", "first_name last_name user_type profile_picture")
       .sort({ created_at: 1 });
@@ -575,6 +636,11 @@ export const uploadTicketFile = async (req, res) => {
 
     const ticket = await SupportTicket.findById(ticketId);
     if (!ticket) return res.status(404).json({ error: "Ticket not found" });
+
+    const access = await buildTicketAccessContext(ticket, req.user);
+    if (!access.canAccess) {
+      return res.status(403).json({ error: "Not authorized to upload files to this ticket" });
+    }
 
     const exportPolicy = evaluateCountryFeatureAccess(ticket.country, "data_export", {
       complianceApproved: req.body?.regional_compliance_ack === true,
@@ -689,6 +755,14 @@ export const scheduleMeetingFromTicket = async (req, res) => {
         ? new Date(scheduled_at)
         : new Date();
 
+    if ((scheduled_date && scheduled_time) || scheduled_at) {
+      if (scheduledDate.getTime() < Date.now() - 60 * 1000) {
+        return res.status(400).json({
+          error: "Meeting date and time must be current or in the future",
+        });
+      }
+    }
+
     const meeting = await Meeting.create({
       meeting_code: meetingCode,
       title: meetingTitle,
@@ -798,6 +872,11 @@ export const checkSLAStatus = async (req, res) => {
     const ticket = await SupportTicket.findById(ticketId);
     if (!ticket) {
       return res.status(404).json({ error: "Ticket not found" });
+    }
+
+    const access = await buildTicketAccessContext(ticket, req.user);
+    if (!access.canAccess) {
+      return res.status(403).json({ error: "Not authorized to view this ticket SLA" });
     }
 
     const now = new Date();

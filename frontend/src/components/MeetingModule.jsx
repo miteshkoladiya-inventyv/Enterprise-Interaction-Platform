@@ -3861,7 +3861,7 @@ const MeetingModule = ({ isVisible = true, onMeetingStateChange , readOnly = fal
 
       {/* Meeting Form Modal */}
       {showForm && !readOnly && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 px-4">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 px-4">
           <div className="bg-zinc-900 rounded-xl border border-zinc-700/60 shadow-xl max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col">
             <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-700/50">
               <div>

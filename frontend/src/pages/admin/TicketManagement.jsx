@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+﻿import { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import {
   Ticket,
@@ -41,8 +41,7 @@ export default function TicketManagement() {
   const [assignModal, setAssignModal] = useState(null); // ticketId
   const [selectedEmployee, setSelectedEmployee] = useState("");
   const [assigning, setAssigning] = useState(false);
-  const [detailTicket, setDetailTicket] = useState(null);
-
+  
   const token = localStorage.getItem("token");
   const headers = token && token !== "undefined" && token !== "null"
     ? { Authorization: `Bearer ${token}` }
@@ -365,7 +364,7 @@ export default function TicketManagement() {
                 <option value="">Select employee...</option>
                 {employees.map((emp) => (
                   <option key={emp._id} value={emp._id}>
-                    {emp.user_id?.first_name} {emp.user_id?.last_name} —{" "}
+                    {emp.user_id?.first_name} {emp.user_id?.last_name} -{" "}
                     {emp.department?.name || "N/A"} ({emp.position || "N/A"})
                   </option>
                 ))}
@@ -400,3 +399,4 @@ export default function TicketManagement() {
     </div>
   );
 }
+

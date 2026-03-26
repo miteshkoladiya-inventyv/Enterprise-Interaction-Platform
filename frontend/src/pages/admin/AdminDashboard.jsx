@@ -99,7 +99,7 @@ export default function AdminDashboard() {
   const renderPageContent = () => {
     switch (currentPage) {
       case "dashboard":
-        return <Dashboard />;
+        return <Dashboard onNavigate={handleNavigation} />;
       case "employees":
         return <EmployeeManagement />;
       case "departments":

@@ -62,6 +62,7 @@ const supportTicketSchema = new Schema(
     },
     // Timestamps for SLA
     assigned_at: { type: Date },
+    first_response_at: { type: Date },
     started_at: { type: Date },
     resolved_at: { type: Date },
     // SLA & escalation
@@ -71,6 +72,12 @@ const supportTicketSchema = new Schema(
     first_response_breached: { type: Boolean, default: false },
     escalation_level: { type: Number, default: 0 }, // 0=none, 1=team_lead, 2=manager, 3=director
     is_escalated: { type: Boolean, default: false },
+    escalated_to: {
+      type: Schema.Types.ObjectId,
+      ref: "Employee",
+    },
+    escalation_reason: { type: String },
+    escalated_at: { type: Date },
     // Feedback
     satisfaction_rating: { type: Number, min: 1, max: 5 },
     satisfaction_comment: { type: String },

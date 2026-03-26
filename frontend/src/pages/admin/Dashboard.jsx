@@ -1,17 +1,16 @@
-import { useState, useEffect, useMemo } from "react";
+﻿import { useState, useEffect, useMemo } from "react";
 import {
   Users,
   MessageSquare,
   Video,
-  Activity,
   UserCheck,
-  ArrowUpRight,
-  ArrowDownRight,
   Clock,
   Briefcase,
-  TrendingUp,
-  Calendar,
   RefreshCcw,
+  Ticket,
+  ShieldCheck,
+  Globe2,
+  UserPlus,
 } from "lucide-react";
 import axios from "axios";
 import { BACKEND_URL } from "@/config";
@@ -22,17 +21,26 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 
 
-export default function Dashboard() {
+export default function Dashboard({ onNavigate }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [employees, setEmployees] = useState([]);
   const [stats, setStats] = useState({ messagesToday: 0, activeMeetings: 0 });
-  const [upcomingMeetings, setUpcomingMeetings] = useState([]);
+  const [ticketStats, setTicketStats] = useState({
+    total_tickets: 0,
+    by_status: {},
+    by_priority: {},
+    sla_breaches: 0,
+  });
   const adminToken = localStorage.getItem("token");
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([loadEmployees(), loadStats()]);
+    await Promise.all([
+      loadEmployees(),
+      loadStats(),
+      loadTicketStats(),
+    ]);
     setRefreshing(false);
   };
 
@@ -84,7 +92,7 @@ export default function Dashboard() {
   useEffect(() => {
     loadEmployees();
     loadStats();
-    loadUpcomingMeetings();
+    loadTicketStats();
   }, []);
 
   const loadEmployees = async () => {
@@ -111,23 +119,79 @@ export default function Dashboard() {
     }
   };
 
-  const loadUpcomingMeetings = async () => {
+  const loadTicketStats = async () => {
     try {
-      const res = await axios.get(`${BACKEND_URL}/meetings`, {
+      const res = await axios.get(`${BACKEND_URL}/tickets/stats/sla`, {
         headers: { Authorization: `Bearer ${adminToken}` },
       });
-      const now = new Date();
-      const upcoming = (res.data.data || [])
-        .filter(
-          (m) => m.status === "scheduled" && new Date(m.scheduled_at) > now
-        )
-        .sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at))
-        .slice(0, 5);
-      setUpcomingMeetings(upcoming);
-    } catch {
-      // silently fail
+      setTicketStats(res.data || {});
+    } catch (error) {
+      console.error("Error loading ticket stats:", error);
     }
   };
+
+  const recentHires = useMemo(() => {
+    return [...employees]
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt || b.hire_date || 0) -
+          new Date(a.createdAt || a.hire_date || 0)
+      )
+      .slice(0, 4);
+  }, [employees]);
+
+  const quickActions = [
+    {
+      label: "Create Employee",
+      hint: "Add a new team member",
+      icon: UserPlus,
+      onClick: () => onNavigate?.("employees"),
+    },
+    {
+      label: "Review Tickets",
+      hint: "Check open support work",
+      icon: Ticket,
+      onClick: () => onNavigate?.("tickets"),
+    },
+    {
+      label: "Manage Roles",
+      hint: "Update access quickly",
+      icon: ShieldCheck,
+      onClick: () => onNavigate?.("roles"),
+    },
+    {
+      label: "Open Global Work",
+      hint: "See timezone overlap",
+      icon: Globe2,
+      onClick: () => onNavigate?.("global-collab"),
+    },
+  ];
+
+  const ticketOverview = [
+    {
+      label: "Open",
+      value:
+        (ticketStats.by_status?.open || 0) +
+        (ticketStats.by_status?.pending || 0) +
+        (ticketStats.by_status?.in_progress || 0),
+      tone: "text-amber-400",
+    },
+    {
+      label: "Critical",
+      value: ticketStats.by_priority?.critical || 0,
+      tone: "text-red-400",
+    },
+    {
+      label: "SLA Breaches",
+      value: ticketStats.sla_breaches || 0,
+      tone: "text-rose-400",
+    },
+    {
+      label: "Resolved",
+      value: ticketStats.by_status?.resolved || 0,
+      tone: "text-emerald-400",
+    },
+  ];
 
   const statsData = [
     {
@@ -186,7 +250,7 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 lg:p-8 w-full space-y-8">
-      {/* ─── Welcome Header ─── */}
+      {/* â”€â”€â”€ Welcome Header â”€â”€â”€ */}
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
@@ -222,7 +286,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ─── KPI Cards ─── */}
+      {/* â”€â”€â”€ KPI Cards â”€â”€â”€ */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {statsData.map((stat, idx) => {
           const Icon = stat.icon;
@@ -242,9 +306,6 @@ export default function Dashboard() {
                   >
                     <Icon className={`size-[18px] ${stat.iconColor}`} />
                   </div>
-                  <div className="flex items-center gap-1 text-emerald-400 text-xs font-medium">
-                    <TrendingUp className="size-3" />
-                  </div>
                 </div>
                 <p className="text-3xl font-bold tracking-tight tabular-nums">
                   {stat.value ?? 0}
@@ -258,7 +319,7 @@ export default function Dashboard() {
         })}
       </div>
 
-      {/* ─── Main Panels ─── */}
+      {/* â”€â”€â”€ Main Panels â”€â”€â”€ */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         {/* Recent Employees - 2 cols */}
         <Card className="xl:col-span-2 bg-zinc-900/80 border-zinc-800/80">
@@ -267,25 +328,33 @@ export default function Dashboard() {
               <Users className="size-4 text-indigo-400" />
               Team Members
             </CardTitle>
-            <Badge
-              variant="secondary"
-              className="bg-indigo-500/10 text-indigo-400 border-indigo-500/20"
-            >
-              {activeEmployeesList.length} active
-            </Badge>
+            <div className="flex items-center gap-2">
+              <Badge
+                variant="secondary"
+                className="bg-indigo-500/10 text-indigo-400 border-indigo-500/20"
+              >
+                {activeEmployeesList.length} active
+              </Badge>
+              <button
+                type="button"
+                className="h-8 rounded-lg px-2 text-xs font-medium text-zinc-400 transition hover:bg-zinc-800/70 hover:text-zinc-100"
+                onClick={() => onNavigate?.("employees")}
+              >
+                View all
+              </button>
+            </div>
           </CardHeader>
           <CardContent>
-            <div className="space-y-0.5">
+            <div className="max-h-[560px] space-y-0.5 overflow-y-auto pr-1">
               {employees
                 .filter((employee) => employee.is_active)
-                .slice(0, 6)
                 .map((employee) => {
                   const fullName = `${employee.user_id?.first_name} ${employee.user_id?.last_name}`;
                   const initials = fullName
                     .split(" ")
                     .map((n) => n[0])
                     .join("");
-                  const deptName = employee.department?.name || "—";
+                  const deptName = employee.department?.name || "-";
                   const deptColor = employee.department?.color || "#71717a";
                   return (
                     <div
@@ -324,6 +393,20 @@ export default function Dashboard() {
                         >
                           {employee.position}
                         </Badge>
+                        {employee.shift_type ? (
+                          <Badge
+                            variant="outline"
+                            className={`text-[10px] ${
+                              employee.shift_type === "night"
+                                ? "border-blue-500/20 text-blue-300"
+                                : "border-orange-500/20 text-orange-300"
+                            }`}
+                          >
+                            {employee.shift_type === "night"
+                              ? "Night Shift"
+                              : "Day Shift"}
+                          </Badge>
+                        ) : null}
                       </div>
                     </div>
                   );
@@ -339,6 +422,61 @@ export default function Dashboard() {
 
         {/* Right Column */}
         <div className="space-y-6">
+          <Card className="bg-zinc-900/80 border-zinc-800/80">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-semibold">
+                Quick Actions
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1">
+              {quickActions.map((action) => {
+                const Icon = action.icon;
+                return (
+                  <button
+                    key={action.label}
+                    type="button"
+                    onClick={action.onClick}
+                    className="flex items-start gap-3 rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 text-left transition hover:border-zinc-700 hover:bg-zinc-900/80"
+                  >
+                    <div className="mt-0.5 flex size-9 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-300">
+                      <Icon className="size-4" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-zinc-100">
+                        {action.label}
+                      </p>
+                      <p className="mt-1 text-xs text-zinc-500">{action.hint}</p>
+                    </div>
+                  </button>
+                );
+              })}
+            </CardContent>
+          </Card>
+
+          <Card className="bg-zinc-900/80 border-zinc-800/80">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-semibold flex items-center gap-2">
+                <Ticket className="size-4 text-amber-400" />
+                Ticket Overview
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 gap-3">
+                {ticketOverview.map((item) => (
+                  <div
+                    key={item.label}
+                    className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3"
+                  >
+                    <p className="text-xs text-zinc-500">{item.label}</p>
+                    <p className={`mt-2 text-2xl font-semibold ${item.tone}`}>
+                      {item.value}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
           {/* Department Breakdown */}
           <Card className="bg-zinc-900/80 border-zinc-800/80">
             <CardHeader className="pb-3">
@@ -363,7 +501,7 @@ export default function Dashboard() {
                           {dept}
                         </span>
                         <span className="text-xs text-zinc-500 tabular-nums">
-                          {count} ({pct}%)
+                          {count}
                         </span>
                       </div>
                       <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
@@ -383,113 +521,58 @@ export default function Dashboard() {
               </div>
             </CardContent>
           </Card>
-
-          {/* Recent Activity */}
+          {/* Recent Hires */}
           <Card className="bg-zinc-900/80 border-zinc-800/80">
             <CardHeader className="pb-3">
               <CardTitle className="text-base font-semibold flex items-center gap-2">
-                <Activity className="size-4 text-emerald-400" />
-                Recent Activity
+                <UserPlus className="size-4 text-emerald-400" />
+                Recent Hires
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
-                {activeEmployeesList.slice(0, 4).map((emp) => (
-                  <div key={emp.id} className="flex items-start gap-3">
-                    <div className="size-7 rounded-full bg-gradient-to-br from-indigo-500/20 to-violet-500/10 flex items-center justify-center flex-shrink-0 mt-0.5 ring-1 ring-indigo-500/10">
-                      <Activity className="size-3 text-indigo-400" />
+                {recentHires.map((employee) => {
+                  const fullName = `${employee.user_id?.first_name} ${employee.user_id?.last_name}`;
+                  const initials = fullName
+                    .split(" ")
+                    .map((n) => n?.[0] || "")
+                    .join("")
+                    .slice(0, 2);
+                  return (
+                    <div key={employee._id} className="flex items-start gap-3">
+                      <Avatar className="size-8 ring-1 ring-zinc-800">
+                        <AvatarImage src={employee.user_id?.profile_picture} />
+                        <AvatarFallback className="bg-zinc-800 text-[10px] text-zinc-300">
+                          {initials}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0">
+                        <p className="text-sm text-zinc-300">
+                          <span className="font-medium text-zinc-100">
+                            {fullName}
+                          </span>
+                        </p>
+                        <p className="mt-1 text-[11px] text-zinc-500">
+                          {employee.department?.name || "-"} · {employee.position}
+                        </p>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-sm text-zinc-400">
-                        <span className="font-medium text-zinc-200">
-                          {emp.name}
-                        </span>{" "}
-                        joined{" "}
-                        <span className="text-zinc-300 capitalize">
-                          {emp.department?.name || "—"}
-                        </span>
-                      </p>
-                      <p className="text-[10px] text-zinc-600 mt-0.5 capitalize">
-                        {emp.position}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-                {activeEmployeesList.length === 0 && (
+                  );
+                })}
+                {recentHires.length === 0 && (
                   <div className="py-10 text-center text-sm text-zinc-500">
-                    No recent activity
+                    No recent hires
                   </div>
                 )}
               </div>
             </CardContent>
-          </Card>
-
-          {/* Upcoming Meetings */}
-          <Card className="bg-zinc-900/80 border-zinc-800/80">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base font-semibold flex items-center gap-2">
-                <Calendar className="size-4 text-violet-400" />
-                Upcoming Meetings
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {upcomingMeetings.length === 0 ? (
-                <div className="text-center py-8">
-                  <Video className="size-8 text-zinc-700 mx-auto mb-2" />
-                  <p className="text-sm text-zinc-500">No upcoming meetings</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {upcomingMeetings.map((m) => {
-                    const d = new Date(m.scheduled_at);
-                    const hostName = m.host_id?.first_name
-                      ? `${m.host_id.first_name} ${m.host_id.last_name || ""}`.trim()
-                      : "Unknown";
-                    return (
-                      <div
-                        key={m._id}
-                        className="flex items-center gap-3 p-3 rounded-lg bg-zinc-800/50 border border-zinc-700/30 hover:bg-zinc-800 transition-colors"
-                      >
-                        <div className="size-9 rounded-lg bg-violet-500/10 flex items-center justify-center flex-shrink-0">
-                          <Video className="size-4 text-violet-400" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-zinc-200 truncate">
-                            {m.title}
-                          </p>
-                          <p className="text-[11px] text-zinc-500">
-                            {d.toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                            })}{" "}
-                            at{" "}
-                            {d.toLocaleTimeString("en-US", {
-                              hour: "numeric",
-                              minute: "2-digit",
-                            })}
-                            {m.duration_minutes
-                              ? ` · ${m.duration_minutes}min`
-                              : ""}
-                          </p>
-                          <p className="text-[10px] text-zinc-600 mt-0.5">
-                            Host: {hostName}
-                          </p>
-                        </div>
-                        <Badge
-                          variant="outline"
-                          className="text-[10px] border-emerald-500/20 text-emerald-400 flex-shrink-0"
-                        >
-                          Upcoming
-                        </Badge>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+          </Card>        </div>
       </div>
     </div>
   );
 }
+
+
+
+
+

@@ -186,15 +186,6 @@ export default function AdminLoginPage() {
 
           <div className="mt-8 pt-6 border-t space-y-3">
             <p className="text-center text-sm text-gray-500">
-              Don't have an account?{" "}
-              <a
-                href="/adminSignup"
-                className="text-violet-600 font-medium hover:underline"
-              >
-                Create Admin Account
-              </a>
-            </p>
-            <p className="text-center text-sm text-gray-500">
               Employee account?{" "}
               <a
                 href="/login"
