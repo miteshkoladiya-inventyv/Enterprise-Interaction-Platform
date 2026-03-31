@@ -1851,8 +1851,8 @@ const ChatInterface = () => {
                 sender_id: data.sender_id || chat.last_message?.sender_id,
               },
               unread_count:
-                currentChat?._id === data.channel_id
-                  ? 0
+                currentChat?._id === data.channel_id || data.is_own
+                  ? chat.unread_count || 0
                   : (chat.unread_count || 0) + 1,
             };
           return chat;

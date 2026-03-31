@@ -1,6 +1,5 @@
-import React, { useEffect, useRef, useState, useMemo } from "react";
-import { PhoneOff, Mic, MicOff, Video, VideoOff, Loader2, Maximize2, Minimize2, UserPlus } from "lucide-react";
-import InviteParticipantModal from "./InviteParticipantModal";
+import React, { useEffect, useRef, useState } from "react";
+import { PhoneOff, Mic, MicOff, Video, VideoOff, Loader2, Maximize2, Minimize2 } from "lucide-react";
 
 const ActiveVideoCallBar = ({
   remoteUser,
@@ -13,8 +12,6 @@ const ActiveVideoCallBar = ({
   onHangUp,
   isConnecting,
   errorMessage,
-  onInviteParticipant, // New prop: callback when inviting participants
-  currentUserId, // New prop: for authorization header
 }) => {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -28,14 +25,6 @@ const ActiveVideoCallBar = ({
   const [resizeDirection, setResizeDirection] = useState(null);
   const [resizeStart, setResizeStart] = useState({ x: 0, y: 0, width: 0, height: 0, left: 0, top: 0 });
   const draggableRef = useRef(null);
-  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
-
-  // Get authorization header
-  const token = typeof localStorage !== "undefined" ? localStorage.getItem("token") : null;
-  const authHeader = useMemo(
-    () => (token ? { Authorization: `Bearer ${token}` } : {}),
-    [token]
-  );
   
   const MIN_WIDTH = 320;
   const MIN_HEIGHT = 240;
@@ -373,14 +362,6 @@ const ActiveVideoCallBar = ({
             </button>
 
             <button
-              onClick={() => setIsInviteModalOpen(true)}
-              className="p-4 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white transition-all shadow-lg"
-              title="Invite participants"
-            >
-              <UserPlus className="w-6 h-6" />
-            </button>
-
-            <button
               onClick={onHangUp}
               className="p-4 rounded-full bg-red-500 hover:bg-red-600 text-white transition-all shadow-lg"
               title="End call"
@@ -555,14 +536,6 @@ const ActiveVideoCallBar = ({
           </button>
 
           <button
-            onClick={() => setIsInviteModalOpen(true)}
-            className="p-2 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 transition-colors"
-            title="Invite participants"
-          >
-            <UserPlus className="w-4 h-4" />
-          </button>
-
-          <button
             onClick={onHangUp}
             className="p-2 rounded-lg bg-red-500 hover:bg-red-600 text-white transition-colors"
             title="End call"
@@ -571,20 +544,6 @@ const ActiveVideoCallBar = ({
           </button>
         </div>
       </div>
-
-      {/* Invite Participant Modal */}
-      <InviteParticipantModal
-        isOpen={isInviteModalOpen}
-        onClose={() => setIsInviteModalOpen(false)}
-        onInvite={(userId, userName, user) => {
-          if (onInviteParticipant) {
-            onInviteParticipant(userId, userName, user);
-          }
-          setIsInviteModalOpen(false);
-        }}
-        excludeUserIds={[currentUserId, remoteUser?.id]}
-        authHeader={authHeader}
-      />
     </>
   );
 };

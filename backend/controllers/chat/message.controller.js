@@ -59,6 +59,11 @@ export const sendMessage = async (req, res) => {
 
     await message.save();
 
+    // Update channel last_message_at
+    await ChatChannel.findByIdAndUpdate(channel_id, {
+      last_message_at: message.created_at,
+    });
+
     // Phase 2: Process mentions in the message (async, no wait)
     processMentions(message._id, channel_id).catch((err) =>
       console.error("[MESSAGE] Mention processing error:", err)
@@ -73,9 +78,102 @@ export const sendMessage = async (req, res) => {
     // Populate and return message
     const populatedMessage = await Message.findById(message._id)
       .populate("sender_id", "first_name last_name email user_type")
-      .populate("parent_message_id");
+      .populate({
+        path: "parent_message_id",
+        select: "content sender_id created_at",
+        populate: {
+          path: "sender_id",
+          select: "first_name last_name email user_type",
+        },
+      });
 
-    return sendCreated(res, populatedMessage, "Message sent successfully");
+    // Get all channel members for socket emission
+    const channelMembers = await ChannelMember.find({ channel_id });
+
+    // Create complete message data with sender information
+    const messageData = {
+      _id: populatedMessage._id,
+      channel_id: channel_id,
+      content: populatedMessage.content,
+      sender_id: populatedMessage.sender_id._id,
+      sender: {
+        _id: populatedMessage.sender_id._id,
+        first_name: populatedMessage.sender_id.first_name,
+        last_name: populatedMessage.sender_id.last_name,
+        full_name: `${populatedMessage.sender_id.first_name} ${populatedMessage.sender_id.last_name}`,
+        email: populatedMessage.sender_id.email,
+        user_type: populatedMessage.sender_id.user_type,
+      },
+      message_type: populatedMessage.message_type || "text",
+      parent_message_id: populatedMessage.parent_message_id?._id || null,
+      parent_message: populatedMessage.parent_message_id
+        ? {
+            _id: populatedMessage.parent_message_id._id,
+            content: populatedMessage.parent_message_id.content,
+            sender_id: populatedMessage.parent_message_id.sender_id._id,
+            sender: {
+              _id: populatedMessage.parent_message_id.sender_id._id,
+              first_name: populatedMessage.parent_message_id.sender_id.first_name,
+              last_name: populatedMessage.parent_message_id.sender_id.last_name,
+              full_name: `${populatedMessage.parent_message_id.sender_id.first_name} ${populatedMessage.parent_message_id.sender_id.last_name}`,
+            },
+            created_at: populatedMessage.parent_message_id.created_at,
+          }
+        : null,
+      created_at: populatedMessage.created_at,
+      updated_at: populatedMessage.updated_at,
+      is_edited: false,
+      seen_by: [],
+      seen_count: 0,
+      reactions: {},
+    };
+
+    // Emit to ALL channel members via socket with correct is_own flag
+    const MESSAGE_DELIVERY_RETRY_MS = 500;
+    const MESSAGE_DELIVERY_RETRY_ATTEMPTS = 20; // 10 seconds
+
+    const emitToMember = (memberUserId, isOwn) => {
+      const receiverSocketId = getReceiverSocketId(memberUserId);
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit("new_message", {
+          ...messageData,
+          is_own: isOwn,
+        });
+        return true;
+      }
+      return false;
+    };
+
+    channelMembers.forEach((member) => {
+      const memberUserId = member.user_id.toString();
+      const isOwn = memberUserId === userId;
+
+      if (emitToMember(memberUserId, isOwn)) {
+        console.log(`📤 [GROUP] Emitted message to user ${memberUserId}`);
+        return;
+      }
+
+      // Retry for users who may be connecting
+      let attempts = 0;
+      const retryInterval = setInterval(() => {
+        attempts++;
+        if (emitToMember(memberUserId, isOwn)) {
+          console.log(`📤 [GROUP] Emitted message to user ${memberUserId} (delayed)`);
+          clearInterval(retryInterval);
+        } else if (attempts >= MESSAGE_DELIVERY_RETRY_ATTEMPTS) {
+          clearInterval(retryInterval);
+        }
+      }, MESSAGE_DELIVERY_RETRY_MS);
+    });
+
+    // Return response with is_own: true for the sender
+    return res.status(201).json({
+      message: "Message sent successfully",
+      data: {
+        ...messageData,
+        is_own: true,
+      },
+    });
   } catch (error) {
     console.error("[MESSAGE] Send message error:", error.message);
     return sendServerError(res, error);
