@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useCallback } from "react";
+﻿import { useState, useEffect, useCallback, useMemo } from "react";
 import axios from "axios";
 import {
   Ticket,
@@ -43,9 +43,12 @@ export default function TicketManagement() {
   const [assigning, setAssigning] = useState(false);
   
   const token = localStorage.getItem("token");
-  const headers = token && token !== "undefined" && token !== "null"
-    ? { Authorization: `Bearer ${token}` }
-    : {};
+  const headers = useMemo(() =>
+    token && token !== "undefined" && token !== "null"
+      ? { Authorization: `Bearer ${token}` }
+      : {},
+    [token]
+  );
 
   const fetchTickets = useCallback(async () => {
     try {
@@ -57,7 +60,7 @@ export default function TicketManagement() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [headers]);
 
   const fetchEmployees = useCallback(async () => {
     try {
@@ -68,7 +71,7 @@ export default function TicketManagement() {
     } catch (err) {
       console.error("Fetch employees error:", err);
     }
-  }, []);
+  }, [headers]);
 
   useEffect(() => {
     fetchTickets();

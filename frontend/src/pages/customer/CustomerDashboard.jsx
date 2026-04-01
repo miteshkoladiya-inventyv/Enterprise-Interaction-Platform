@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import axios from "axios";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import MeetingModule from "@/components/MeetingModule";
@@ -105,9 +105,12 @@ export default function CustomerDashboard() {
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const token = localStorage.getItem("token");
-  const headers = token && token !== "undefined" && token !== "null"
-    ? { Authorization: `Bearer ${token}` }
-    : {};
+  const headers = useMemo(() => 
+    token && token !== "undefined" && token !== "null"
+      ? { Authorization: `Bearer ${token}` }
+      : {},
+    [token]
+  );
 
   const fetchTickets = useCallback(async () => {
     if (!token) return; // Skip if no token
@@ -147,11 +150,29 @@ export default function CustomerDashboard() {
     fetchTickets();
   }, [fetchTickets]);
 
+  // Sync selectedTicket with tickets array when tickets are refreshed
+  useEffect(() => {
+    if (selectedTicket && tickets.length > 0) {
+      const updatedTicket = tickets.find(t => t._id === selectedTicket._id);
+      if (updatedTicket) {
+        setSelectedTicket(updatedTicket);
+      }
+    }
+  }, [tickets]);
+
   useEffect(() => {
     if (!socket || !selectedTicket) return;
     socket.emit("ticket-join", { ticketId: selectedTicket._id });
+
+    // Cleanup on tab close/refresh
+    const handleBeforeUnload = () => {
+      socket.emit("ticket-leave", { ticketId: selectedTicket._id });
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
     return () => {
       socket.emit("ticket-leave", { ticketId: selectedTicket._id });
+      window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, [socket, selectedTicket?._id]);
 
@@ -177,6 +198,12 @@ export default function CustomerDashboard() {
     setSelectedTicket(ticket);
     fetchMessages(ticket._id);
     setShowCreateForm(false);
+    // Show satisfaction form automatically for resolved tickets without rating
+    if ((ticket.status === "resolved" || ticket.status === "closed") && !ticket.satisfaction_rating) {
+      setShowSatisfactionForm(true);
+    } else {
+      setShowSatisfactionForm(false);
+    }
   };
 
   const handleCreateTicket = async (e) => {
@@ -883,10 +910,17 @@ if (showMeeting) {
                     <CheckCircle2 className="h-4 w-4" />
                     <div>
                       <p className="text-sm font-medium">This ticket has been resolved.</p>
-                      {selectedTicket.satisfaction_rating && (
+                      {selectedTicket.satisfaction_rating ? (
                         <p className="text-xs text-green-600 dark:text-green-300 mt-1">
                           You rated this ticket {selectedTicket.satisfaction_rating}⭐
                         </p>
+                      ) : (
+                        <button
+                          onClick={() => setShowSatisfactionForm(true)}
+                          className="text-xs text-blue-600 dark:text-blue-400 hover:underline mt-1"
+                        >
+                          Rate your experience
+                        </button>
                       )}
                     </div>
                   </div>

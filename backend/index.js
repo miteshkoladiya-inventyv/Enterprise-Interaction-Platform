@@ -24,6 +24,7 @@ import Meeting from "./models/Meeting.js";
 import { assertLiveKitCloudConfigured } from "./services/livekit.service.js";
 import { runStaleTranscriptionCleanupJob } from "./controllers/meeting/recording.controller.js";
 import { startMeetingMaintenanceScheduler } from "./jobs/meetingMaintenanceJob.js";
+import { startTicketSlaScheduler } from "./jobs/ticketSlaJob.js";
 import { initializeScheduledMessageJob } from "./services/scheduledMessage.service.js";
 
 import { verifyToken } from "./middlewares/auth.middleware.js";
@@ -190,6 +191,13 @@ server.listen(PORT, () => {
     startMeetingMaintenanceScheduler();
   } catch (error) {
     console.error("❌ Failed to start meeting maintenance scheduler:", error.message);
+  }
+
+  // ✅ Start ticket SLA check job (auto-breach detection, auto-escalation)
+  try {
+    startTicketSlaScheduler();
+  } catch (error) {
+    console.error("❌ Failed to start ticket SLA scheduler:", error.message);
   }
 
   // ✅ Start scheduled message job (send scheduled messages at their time)

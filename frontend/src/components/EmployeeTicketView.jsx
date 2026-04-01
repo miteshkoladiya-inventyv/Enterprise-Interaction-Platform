@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef, useCallback } from "react";
+﻿import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import axios from "axios";
 import {
   Send,
@@ -110,9 +110,12 @@ export default function EmployeeTicketView() {
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const token = localStorage.getItem("token");
-  const headers = token && token !== "undefined" && token !== "null"
-    ? { Authorization: `Bearer ${token}` }
-    : {};
+  const headers = useMemo(() =>
+    token && token !== "undefined" && token !== "null"
+      ? { Authorization: `Bearer ${token}` }
+      : {},
+    [token]
+  );
 
   const fetchTickets = useCallback(async () => {
     if (!token) return; // Skip if no token
@@ -139,17 +142,35 @@ export default function EmployeeTicketView() {
     } catch (err) {
       console.error("Fetch messages error:", err);
     }
-  }, []);
+  }, [headers]);
 
   useEffect(() => {
     fetchTickets();
   }, [fetchTickets]);
 
+  // Sync selectedTicket with tickets array when tickets are refreshed
+  useEffect(() => {
+    if (selectedTicket && tickets.length > 0) {
+      const updatedTicket = tickets.find(t => t._id === selectedTicket._id);
+      if (updatedTicket) {
+        setSelectedTicket(updatedTicket);
+      }
+    }
+  }, [tickets]);
+
   useEffect(() => {
     if (!socket || !selectedTicket) return;
     socket.emit("ticket-join", { ticketId: selectedTicket._id });
+
+    // Cleanup on tab close/refresh
+    const handleBeforeUnload = () => {
+      socket.emit("ticket-leave", { ticketId: selectedTicket._id });
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
     return () => {
       socket.emit("ticket-leave", { ticketId: selectedTicket._id });
+      window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, [socket, selectedTicket?._id]);
 

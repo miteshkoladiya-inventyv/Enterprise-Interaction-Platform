@@ -163,23 +163,39 @@ export const escalateTicket = async (ticket, reason) => {
             ticket.assigned_agent_id
           );
           if (currentAgent && currentAgent.department) {
+            // First try to find a team_lead in the same department
             escalatedTo = await EmployeeModel.findOne({
               department: currentAgent.department,
               position: "team_lead",
               is_active: true,
             });
+            // Fallback: find any team_lead or senior_engineer in the department
+            if (!escalatedTo) {
+              escalatedTo = await EmployeeModel.findOne({
+                department: currentAgent.department,
+                position: { $in: ["team_lead", "senior_engineer"] },
+                is_active: true,
+              });
+            }
           }
         }
+        // Fallback: find any active team_lead
+        if (!escalatedTo) {
+          escalatedTo = await EmployeeModel.findOne({
+            position: "team_lead",
+            is_active: true,
+          });
+        }
       } else if (nextEscalationLevel === 2) {
-        // Escalate to manager
+        // Escalate to manager (project_manager or cto)
         escalatedTo = await EmployeeModel.findOne({
-          position: "project_manager",
+          position: { $in: ["project_manager", "cto"] },
           is_active: true,
         });
       } else if (nextEscalationLevel === 3) {
-        // Escalate to director
+        // Escalate to director (ceo or cto)
         escalatedTo = await EmployeeModel.findOne({
-          position: "ceo",
+          position: { $in: ["ceo", "cto"] },
           is_active: true,
         });
       }

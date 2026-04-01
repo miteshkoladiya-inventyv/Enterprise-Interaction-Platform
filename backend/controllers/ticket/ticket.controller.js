@@ -124,9 +124,9 @@ export const createTicket = async (req, res) => {
     let systemMessage = "Ticket created. ";
     if (assignedAgent) {
       const agentName = `${assignedAgent.user_id.first_name} ${assignedAgent.user_id.last_name}`;
-      systemMessage += `Auto-assigned to ${agentName} (${priority.toUpperCase()} - Priority Score: ${priorityScore.toFixed(2)}).`;
+      systemMessage += `Auto-assigned to ${agentName}.`;
     } else {
-      systemMessage += `Waiting for an agent to be assigned. Priority: ${priority.toUpperCase()} (Score: ${priorityScore.toFixed(2)}).`;
+      systemMessage += `Waiting for an agent to be assigned.`;
     }
 
     await TicketMessage.create({
