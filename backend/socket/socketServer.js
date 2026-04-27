@@ -36,20 +36,6 @@ const serializeMeetingParticipants = (room = {}) =>
     handRaised: !!info.handRaised,
     screenSharing: !!info.screenSharing,
   }));
-// NEW â"€ Track active document sessions: docId -> { [userId]: { name, color, socketId }, _latestContent?, _version? }
-const activeDocuments = {};
-
-// NEW â"€ Collaborator color palette (cycles)
-const COLLAB_COLORS = [
-  "#4f8ef7", "#a78bfa", "#34d399", "#f472b6",
-  "#fb923c", "#facc15", "#38bdf8", "#f87171",
-];
-let _colorIdx = 0;
-function nextCollabColor() {
-  const c = COLLAB_COLORS[_colorIdx % COLLAB_COLORS.length];
-  _colorIdx++;
-  return c;
-}
 
 function forwardToUser(eventName, toUserId, payload) {
   const normalizedTo = toUserId?.toString?.() ?? toUserId;
@@ -75,7 +61,6 @@ function broadcastOnlineUsers() {
 io.on("connection", async (socket) => {
   console.log(`Socket connected: ${socket.id}`);
   socket.meetingIds = new Set();
-  socket.documentIds = new Set(); // NEW â"€ track doc rooms this socket has joined
 
   socket.on("message", (msg) => {
     console.log("Message received:", msg);
@@ -706,112 +691,6 @@ io.on("connection", async (socket) => {
     socket.to(room).emit("ticket-typing", { ticketId, userId: socket.userId, userName });
   });
 
-
-
-  // â"€â"€â"€ NEW: Document real-time collaboration â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-
-  /**
-   * Join a document editing session.
-   * Payload: { docId, userName }
-   * Broadcasts "doc-collaborators" to everyone in the room with name + color.
-   */
-  socket.on("doc-join", ({ docId, userName } = {}) => {
-    if (!docId || !socket.userId) return;
-    const room = `doc:${docId}`;
-    socket.join(room);
-    socket.documentIds.add(docId);
-
-    if (!activeDocuments[docId]) activeDocuments[docId] = {};
-
-    // Keep existing color if user is rejoining, assign new one otherwise
-    const existing = activeDocuments[docId][socket.userId];
-    const color = existing?.color || nextCollabColor();
-
-    activeDocuments[docId][socket.userId] = {
-      name: userName || `User ${socket.userId}`,
-      color,
-      socketId: socket.id,
-    };
-
-    const collaborators = _getDocCollaborators(docId);
-    io.to(room).emit("doc-collaborators", { docId, collaborators });
-    console.log(`[DOC] ${socket.userId} joined doc:${docId}`);
-  });
-
-  /**
-   * Explicit leave from a document room.
-   * Payload: { docId }
-   */
-  socket.on("doc-leave", ({ docId } = {}) => {
-    if (!docId || !socket.userId) return;
-    _leaveDocRoom(socket, docId);
-  });
-
-  /**
-   * Broadcast content changes to all OTHER users in the room.
-   * Payload: { docId, content (HTML string), version }
-   * NOT echoed back to sender to avoid cursor-jump issues.
-   */
-  socket.on("doc-update", ({ docId, content, version } = {}) => {
-    if (!docId || !socket.userId || content === undefined) return;
-    // Cache the latest content so late joiners can get it via doc-request-state
-    if (activeDocuments[docId]) {
-      activeDocuments[docId]._latestContent = content;
-      activeDocuments[docId]._version = version || Date.now();
-    }
-    socket.to(`doc:${docId}`).emit("doc-update", {
-      docId,
-      content,
-      version: version || Date.now(),
-      senderId: socket.userId,
-    });
-  });
-
-  /**
-   * Broadcast cursor / selection position to other users in the room.
-   * Payload: { docId, cursor: { x, y } }
-   */
-  socket.on("doc-cursor", ({ docId, cursor } = {}) => {
-    if (!docId || !socket.userId) return;
-    const info = activeDocuments[docId]?.[socket.userId];
-    socket.to(`doc:${docId}`).emit("doc-cursor", {
-      docId,
-      userId: socket.userId,
-      name: info?.name || "User",
-      color: info?.color || "#4f8ef7",
-      cursor,
-    });
-  });
-
-  /**
-   * Typing indicator â€" broadcast to others in the same doc room.
-   * Payload: { docId, userName, isTyping }
-   */
-  socket.on("doc-typing", ({ docId, userName, isTyping } = {}) => {
-    if (!docId || !socket.userId) return;
-    const info = activeDocuments[docId]?.[socket.userId];
-    socket.to(`doc:${docId}`).emit("doc-typing", {
-      docId,
-      userId: socket.userId,
-      userName: userName || info?.name || "User",
-      color: info?.color || "#4f8ef7",
-      isTyping: !!isTyping,
-    });
-  });
-
-  /**
-   * Late joiner requests the latest content snapshot from server memory.
-   * Payload: { docId }
-   * Emits "doc-full-state" back only to the requesting socket.
-   */
-  socket.on("doc-request-state", ({ docId } = {}) => {
-    if (!docId || !socket.userId) return;
-    const latest = activeDocuments[docId]?._latestContent;
-    const version = activeDocuments[docId]?._version;
-    if (latest !== undefined) {
-      socket.emit("doc-full-state", { docId, content: latest, version });
-    }
-  });
 
 
   // Channel Chat: Typing Indicators
@@ -1698,13 +1577,6 @@ io.on("connection", async (socket) => {
           if (meetingLobby[key].length === 0) delete meetingLobby[key];
         });
 
-        // NEW â"€ Remove user from any active document rooms on disconnect
-        if (socket.documentIds && socket.documentIds.size > 0) {
-          socket.documentIds.forEach((docId) => {
-            _leaveDocRoom(socket, docId);
-          });
-        }
-
         // Broadcast updated online users list
         broadcastOnlineUsers();
       } else {
@@ -1716,31 +1588,6 @@ io.on("connection", async (socket) => {
   });
 });
 
-
-function _getDocCollaborators(docId) {
-  if (!activeDocuments[docId]) return [];
-  return Object.entries(activeDocuments[docId])
-    .filter(([key]) => !key.startsWith("_")) // exclude _latestContent, _version
-    .map(([userId, info]) => ({
-      userId,
-      name: info.name,
-      color: info.color,
-    }));
-}
-
-function _leaveDocRoom(socket, docId) {
-  const room = `doc:${docId}`;
-  socket.leave(room);
-  socket.documentIds?.delete(docId);
-  if (activeDocuments[docId]) {
-    delete activeDocuments[docId][socket.userId];
-    const collaborators = _getDocCollaborators(docId);
-    // Intentionally keep _latestContent & _version cached even if room is empty
-    // so the very next person to open this doc gets the latest in-memory version
-    io.to(room).emit("doc-collaborators", { docId, collaborators });
-  }
-  console.log(`[DOC] ${socket.userId} left doc:${docId}`);
-}
 
 // â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 

@@ -15,7 +15,6 @@ import meetingRoutes from "./routes/meeting.routes.js";
 import departmentRoutes from "./routes/department.routes.js";
 import ticketRoutes from "./routes/ticket.routes.js";
 import roleRoutes from "./routes/role.routes.js";
-import documentRoutes from "./routes/document.routes.js";
 import notificationRoutes from "./routes/notification.routes.js";
 import { verifyEmailConfig } from "./utils/emailService.js";
 import { server, app, io } from "./socket/socketServer.js";
@@ -26,6 +25,7 @@ import { runStaleTranscriptionCleanupJob } from "./controllers/meeting/recording
 import { startMeetingMaintenanceScheduler } from "./jobs/meetingMaintenanceJob.js";
 import { startTicketSlaScheduler } from "./jobs/ticketSlaJob.js";
 import { initializeScheduledMessageJob } from "./services/scheduledMessage.service.js";
+import { scheduleFileCleanup } from "./jobs/fileCleanupJob.js";
 
 import { verifyToken } from "./middlewares/auth.middleware.js";
 // Load environment variables
@@ -115,7 +115,6 @@ app.use("/api/ai", aiRoutes);
 app.use("/api/departments", departmentRoutes);
 app.use("/api/tickets", ticketRoutes);
 app.use("/api/roles", roleRoutes);
-app.use("/api/documents", documentRoutes);
 app.use("/api/notifications", notificationRoutes);
 // Admin dashboard stats
 app.get("/api/admin/stats", verifyToken, async (req, res) => {
@@ -205,6 +204,13 @@ server.listen(PORT, () => {
     initializeScheduledMessageJob(io);
   } catch (error) {
     console.error("❌ Failed to start scheduled message job:", error.message);
+  }
+
+  // ✅ Start file cleanup job (clean expired secure links, trim activity logs)
+  try {
+    scheduleFileCleanup(24); // Run every 24 hours
+  } catch (error) {
+    console.error("❌ Failed to start file cleanup job:", error.message);
   }
 
   console.log(`=================================`);

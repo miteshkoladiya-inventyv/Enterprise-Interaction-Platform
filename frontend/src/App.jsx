@@ -8,7 +8,6 @@ import AdminDashboard from "./pages/admin/AdminDashboard";
 import EmployeeDashboard from "./pages/employee/EmployeeDashboard";
 import EmployeeProfilePage from "./pages/employee/ProfilePage";
 import ChangePasswordPage from "./pages/employee/ChangePasswordPage";
-import DocumentEditor from "./pages/documents/DocumentEditor";
 import CustomerLogin from "./pages/customer/CustomerLogin";
 import CustomerRegister from "./pages/customer/CustomerRegister";
 import CustomerDashboard from "./pages/customer/CustomerDashboard";
@@ -113,15 +112,6 @@ function App() {
             element={
               <ProtectedRoute>
                 <ChangePasswordPage />
-              </ProtectedRoute>
-            }
-          />
-
-          <Route
-            path="/documents/:id"
-            element={
-              <ProtectedRoute>
-                <DocumentEditor />
               </ProtectedRoute>
             }
           />

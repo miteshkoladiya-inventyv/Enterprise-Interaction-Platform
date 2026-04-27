@@ -7,7 +7,6 @@ import { cloudinary } from "../../config/cloudinary.js";
 import * as pdfParse from "pdf-parse";
 import mammoth from "mammoth";
 import fetch from "node-fetch";
-import { evaluateCountryFeatureAccess } from "../../utils/crossCountryCollaboration.js";
 
 // Groq AI client — file content Q&A (same config as ai.controller.js)
 let groq = null;
@@ -90,9 +89,9 @@ const extractTextContent = async (fileUrl, mimeType, originalName) => {
 
 const isAdminUser = (user) => user?.user_type === "admin";
 
-const canEditFile = (fileRecord, userId, userDepartment) => {
+const canEditFile = (fileRecord, userId) => {
   if (fileRecord.uploaded_by.toString() === userId.toString()) return true;
-  const role = fileRecord.getPermissionRole(userId, userDepartment);
+  const role = fileRecord.getPermissionRole(userId);
   return role === "editor";
 };
 
@@ -104,12 +103,16 @@ const canManageSharing = (fileRecord, user) => {
 
 const sanitizeActivity = (entry) => ({
   user_id: entry.user_id,
+  user_name: entry.user_id?.first_name 
+    ? `${entry.user_id.first_name} ${entry.user_id.last_name || ""}`.trim() 
+    : null,
+  user_email: entry.user_id?.email || null,
   action: entry.action,
   timestamp: entry.timestamp,
   ip_address: entry.ip_address,
 });
 
-const hasFileAccessSnapshot = (fileRecord, userId, userDepartment) => {
+const hasFileAccessSnapshot = (fileRecord, userId) => {
   if (!fileRecord) return false;
   if (fileRecord.permissions?.is_public) return true;
   if (fileRecord.uploaded_by?.toString() === userId.toString()) return true;
@@ -123,14 +126,6 @@ const hasFileAccessSnapshot = (fileRecord, userId, userDepartment) => {
     (entry) => entry.user_id?.toString() === userId.toString()
   );
   if (sharedUser) return true;
-
-  if (
-    fileRecord.permissions?.department &&
-    userDepartment &&
-    fileRecord.permissions.department === userDepartment
-  ) {
-    return true;
-  }
 
   return false;
 };
@@ -146,10 +141,10 @@ export const uploadFile = async (req, res) => {
     }
 
     const userId = req.userId;
-    const uploader = await User.findById(userId).select("first_name last_name email department country");
+    const uploader = await User.findById(userId).select("first_name last_name email");
     if (!uploader) return res.status(404).json({ error: "User not found" });
 
-    const { description, tags, category, is_public, department } = req.body;
+    const { description, tags, category, is_public } = req.body;
 
     const fileRecord = await File.create({
       file_name: req.file.originalname,
@@ -162,10 +157,8 @@ export const uploadFile = async (req, res) => {
         name: `${uploader.first_name} ${uploader.last_name || ""}`.trim(),
         email: uploader.email,
       },
-      country: uploader.country || "india",
       permissions: {
         is_public: is_public === "true" || is_public === true,
-        department: department || uploader.department || null,
         user_ids: [userId],
         shared_with: [],
       },
@@ -176,12 +169,14 @@ export const uploadFile = async (req, res) => {
       },
     });
 
-    // Try to extract content in the background
+    // Try to extract content in the background (only if user didn't provide description)
     try {
-      const content = await extractTextContent(fileRecord.storage_url, fileRecord.file_type, fileRecord.file_name);
-      if (content && !content.startsWith("[")) {
-        fileRecord.metadata.description = content;
-        await fileRecord.save();
+      if (!description || !description.trim()) {
+        const content = await extractTextContent(fileRecord.storage_url, fileRecord.file_type, fileRecord.file_name);
+        if (content && !content.startsWith("[")) {
+          fileRecord.metadata.description = content;
+          await fileRecord.save();
+        }
       }
     } catch {}
 
@@ -202,14 +197,26 @@ export const uploadFile = async (req, res) => {
 export const listFiles = async (req, res) => {
   try {
     const userId = req.userId;
-    const user = await User.findById(userId).select("department");
-    const userDept = user?.department || null;
-
-    const files = await File.findAccessibleFiles(userId, userDept);
+    const files = await File.findAccessibleFiles(userId);
     return res.status(200).json(files);
   } catch (error) {
     console.error("Error listing files:", error);
     return res.status(500).json({ error: "Failed to list files" });
+  }
+};
+
+// ─────────────────────────────────────────────
+// List files in trash (owner only)
+// GET /api/files/trash
+// ─────────────────────────────────────────────
+export const listTrashFiles = async (req, res) => {
+  try {
+    const userId = req.userId;
+    const files = await File.findTrashFiles(userId);
+    return res.status(200).json(files);
+  } catch (error) {
+    console.error("Error listing trash files:", error);
+    return res.status(500).json({ error: "Failed to list trash files" });
   }
 };
 
@@ -221,12 +228,11 @@ export const getFile = async (req, res) => {
   try {
     const { fileId } = req.params;
     const userId = req.userId;
-    const user = await User.findById(userId).select("department");
 
     const fileRecord = await File.findById(fileId);
     if (!fileRecord) return res.status(404).json({ error: "File not found" });
 
-    if (!fileRecord.hasAccess(userId, user?.department)) {
+    if (!fileRecord.hasAccess(userId)) {
       return res.status(403).json({ error: "Access denied" });
     }
 
@@ -252,11 +258,7 @@ export const extractFileContent = async (req, res) => {
       return res.status(404).json({ error: "File record not found" });
     }
 
-    // ── Access check ──────────────────────────────────────────────────
-    const uploader = await User.findById(userId).select("department");
-    const userDepartment = uploader?.department || null;
-
-    if (!fileRecord.hasAccess(userId, userDepartment)) {
+    if (!fileRecord.hasAccess(userId)) {
       return res.status(403).json({ error: "You do not have access to this file" });
     }
 
@@ -281,14 +283,13 @@ export const extractFileContent = async (req, res) => {
       uploaded_by: fileRecord.uploader_info,
       created_at: fileRecord.created_at,
       has_extracted_content: hasContent,
-      content: content,                          // ← the extracted text
+      content: content,
       metadata: {
         tags: fileRecord.metadata?.tags || [],
         category: fileRecord.metadata?.category || null,
       },
       permissions: {
         is_public: fileRecord.permissions?.is_public,
-        department: fileRecord.permissions?.department,
       },
     });
   } catch (error) {
@@ -309,13 +310,22 @@ export const updateFile = async (req, res) => {
     const fileRecord = await File.findById(fileId);
     if (!fileRecord) return res.status(404).json({ error: "File not found" });
 
-    const user = await User.findById(userId).select("department user_type");
-    const canEdit = canEditFile(fileRecord, userId, user?.department) || isAdminUser(user);
+    const user = await User.findById(userId).select("user_type");
+    const canEdit = canEditFile(fileRecord, userId) || isAdminUser(user);
     if (!canEdit) {
       return res.status(403).json({ error: "Only owner/editor can update this file" });
     }
 
-    const { description, tags, category, is_public, department } = req.body;
+    const { file_name, description, tags, category, is_public } = req.body;
+
+    // Allow renaming the file (only owner/admin can rename)
+    const isOwner = fileRecord.uploaded_by.toString() === userId.toString() || isAdminUser(user);
+    if (file_name !== undefined && isOwner) {
+      const newName = file_name.trim();
+      if (newName.length > 0 && newName.length <= 255) {
+        fileRecord.file_name = newName;
+      }
+    }
 
     if (description !== undefined) fileRecord.metadata.description = description;
     if (tags !== undefined) {
@@ -323,12 +333,8 @@ export const updateFile = async (req, res) => {
     }
     if (category !== undefined) fileRecord.metadata.category = category;
 
-    const isOwner = fileRecord.uploaded_by.toString() === userId.toString() || isAdminUser(user);
     if (is_public !== undefined && isOwner) {
       fileRecord.permissions.is_public = is_public === "true" || is_public === true;
-    }
-    if (department !== undefined && isOwner) {
-      fileRecord.permissions.department = department;
     }
 
     fileRecord.logActivity(userId, "edit", req.ip);
@@ -342,7 +348,7 @@ export const updateFile = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────
-// Delete a file
+// Delete a file (soft delete - move to trash)
 // DELETE /api/files/:fileId
 // ─────────────────────────────────────────────
 export const deleteFile = async (req, res) => {
@@ -359,20 +365,97 @@ export const deleteFile = async (req, res) => {
       return res.status(403).json({ error: "Only the uploader/admin can delete this file" });
     }
 
+    // Soft delete - move to trash
+    fileRecord.is_deleted = true;
+    fileRecord.deleted_at = new Date();
+    fileRecord.deleted_by = userId;
+    fileRecord.logActivity(userId, "delete", req.ip);
+    await fileRecord.save();
+
+    return res.status(200).json({ message: "File moved to trash" });
+  } catch (error) {
+    console.error("Error deleting file:", error);
+    return res.status(500).json({ error: "Failed to delete file" });
+  }
+};
+
+// ─────────────────────────────────────────────
+// Restore file from trash
+// POST /api/files/:fileId/restore
+// ─────────────────────────────────────────────
+export const restoreFile = async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    const userId = req.userId;
+
+    const fileRecord = await File.findById(fileId);
+    if (!fileRecord) return res.status(404).json({ error: "File not found" });
+
+    const user = await User.findById(userId).select("user_type");
+    const canRestore = fileRecord.uploaded_by.toString() === userId.toString() || isAdminUser(user);
+    if (!canRestore) {
+      return res.status(403).json({ error: "Only the uploader/admin can restore this file" });
+    }
+
+    if (!fileRecord.is_deleted) {
+      return res.status(400).json({ error: "File is not in trash" });
+    }
+
+    fileRecord.is_deleted = false;
+    fileRecord.deleted_at = null;
+    fileRecord.deleted_by = null;
+    await fileRecord.save();
+
+    return res.status(200).json({ message: "File restored", file: fileRecord });
+  } catch (error) {
+    console.error("Error restoring file:", error);
+    return res.status(500).json({ error: "Failed to restore file" });
+  }
+};
+
+// ─────────────────────────────────────────────
+// Permanently delete file from trash
+// DELETE /api/files/:fileId/permanent
+// ─────────────────────────────────────────────
+export const permanentDeleteFile = async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    const userId = req.userId;
+
+    const fileRecord = await File.findById(fileId);
+    if (!fileRecord) return res.status(404).json({ error: "File not found" });
+
+    const user = await User.findById(userId).select("user_type");
+    const canDelete = fileRecord.uploaded_by.toString() === userId.toString() || isAdminUser(user);
+    if (!canDelete) {
+      return res.status(403).json({ error: "Only the uploader/admin can permanently delete this file" });
+    }
+
     // Delete from Cloudinary
     try {
       const publicId = fileRecord.storage_path;
       const isImage = fileRecord.file_type?.startsWith("image/");
       await cloudinary.uploader.destroy(publicId, { resource_type: isImage ? "image" : "raw" });
+      
+      // Delete all versions from Cloudinary
+      for (const version of fileRecord.versions || []) {
+        try {
+          await cloudinary.uploader.destroy(version.storage_path, { 
+            resource_type: fileRecord.file_type?.startsWith("image/") ? "image" : "raw" 
+          });
+        } catch (err) {
+          console.error("Version delete error:", err.message);
+        }
+      }
     } catch (err) {
       console.error("Cloudinary delete error:", err.message);
     }
 
     await File.findByIdAndDelete(fileId);
-    return res.status(200).json({ message: "File deleted" });
+    return res.status(200).json({ message: "File permanently deleted" });
   } catch (error) {
-    console.error("Error deleting file:", error);
-    return res.status(500).json({ error: "Failed to delete file" });
+    console.error("Error permanently deleting file:", error);
+    return res.status(500).json({ error: "Failed to permanently delete file" });
   }
 };
 
@@ -395,19 +478,6 @@ export const shareFile = async (req, res) => {
     if (!canManageSharing(fileRecord, user)) {
       return res.status(403).json({ error: "Only owner/admin can share this file" });
     }
-
-    const exportPolicy = evaluateCountryFeatureAccess(fileRecord.country, "data_export", {
-      complianceApproved: req.body?.regional_compliance_ack === true,
-    });
-    if (!exportPolicy.allowed) {
-      return res.status(403).json({
-        error:
-          exportPolicy.reason ||
-          "Sharing this file is restricted by regional data-export policy.",
-        policy: exportPolicy,
-      });
-    }
-
     const shareRole = access_role === "editor" ? "editor" : "viewer";
     fileRecord.grantAccess(targetUserId, shareRole, userId);
     fileRecord.logActivity(userId, "share", req.ip);
@@ -456,27 +526,12 @@ export const downloadFile = async (req, res) => {
   try {
     const { fileId } = req.params;
     const userId = req.userId;
-    const user = await User.findById(userId).select("department");
 
     const fileRecord = await File.findById(fileId);
     if (!fileRecord) return res.status(404).json({ error: "File not found" });
 
-    if (!fileRecord.hasAccess(userId, user?.department)) {
+    if (!fileRecord.hasAccess(userId)) {
       return res.status(403).json({ error: "Access denied" });
-    }
-
-    const exportPolicy = evaluateCountryFeatureAccess(fileRecord.country, "data_export", {
-      complianceApproved:
-        req.query?.regional_compliance_ack === "true" ||
-        req.query?.regional_compliance_ack === true,
-    });
-    if (!exportPolicy.allowed) {
-      return res.status(403).json({
-        error:
-          exportPolicy.reason ||
-          "File download is restricted by regional data-export policy.",
-        policy: exportPolicy,
-      });
     }
 
     fileRecord.logActivity(userId, "download", req.ip);
@@ -502,11 +557,11 @@ export const uploadFileVersion = async (req, res) => {
       return res.status(400).json({ error: "No file uploaded" });
     }
 
-    const user = await User.findById(userId).select("department user_type");
+    const user = await User.findById(userId).select("user_type");
     const fileRecord = await File.findById(fileId);
     if (!fileRecord) return res.status(404).json({ error: "File not found" });
 
-    const canVersion = canEditFile(fileRecord, userId, user?.department) || isAdminUser(user);
+    const canVersion = canEditFile(fileRecord, userId) || isAdminUser(user);
     if (!canVersion) {
       return res.status(403).json({ error: "Only owner/editor can upload a new version" });
     }
@@ -537,12 +592,11 @@ export const getFileVersions = async (req, res) => {
   try {
     const { fileId } = req.params;
     const userId = req.userId;
-    const user = await User.findById(userId).select("department");
 
     const fileRecord = await File.findById(fileId).populate("versions.uploaded_by", "first_name last_name email");
     if (!fileRecord) return res.status(404).json({ error: "File not found" });
 
-    if (!fileRecord.hasAccess(userId, user?.department)) {
+    if (!fileRecord.hasAccess(userId)) {
       return res.status(403).json({ error: "Access denied" });
     }
 
@@ -574,18 +628,6 @@ export const createSecureShareLink = async (req, res) => {
 
     if (!canManageSharing(fileRecord, user)) {
       return res.status(403).json({ error: "Only owner/admin can create secure links" });
-    }
-
-    const exportPolicy = evaluateCountryFeatureAccess(fileRecord.country, "data_export", {
-      complianceApproved: req.body?.regional_compliance_ack === true,
-    });
-    if (!exportPolicy.allowed) {
-      return res.status(403).json({
-        error:
-          exportPolicy.reason ||
-          "Creating secure link is restricted by regional data-export policy.",
-        policy: exportPolicy,
-      });
     }
 
     const ttlHours = Math.min(Math.max(Number(expires_in_hours) || 24, 1), 168);
@@ -653,18 +695,6 @@ export const accessSecureShareLink = async (req, res) => {
       }
     }
 
-    const exportPolicy = evaluateCountryFeatureAccess(fileRecord.country, "data_export", {
-      complianceApproved: req.body?.regional_compliance_ack === true,
-    });
-    if (!exportPolicy.allowed) {
-      return res.status(403).json({
-        error:
-          exportPolicy.reason ||
-          "Accessing this shared file is restricted by regional data-export policy.",
-        policy: exportPolicy,
-      });
-    }
-
     if (secureLink.one_time) {
       secureLink.used_at = new Date();
       await fileRecord.save();
@@ -692,7 +722,7 @@ export const getFileActivityLog = async (req, res) => {
     const { fileId } = req.params;
     const userId = req.userId;
 
-    const user = await User.findById(userId).select("department user_type");
+    const user = await User.findById(userId).select("user_type");
     const fileRecord = await File.findById(fileId)
       .populate("activity_log.user_id", "first_name last_name email")
       .lean();
@@ -700,7 +730,7 @@ export const getFileActivityLog = async (req, res) => {
     if (!fileRecord) return res.status(404).json({ error: "File not found" });
 
     const isOwner = fileRecord.uploaded_by.toString() === userId.toString();
-    const canRead = isOwner || isAdminUser(user) || hasFileAccessSnapshot(fileRecord, userId, user?.department);
+    const canRead = isOwner || isAdminUser(user) || hasFileAccessSnapshot(fileRecord, userId);
     if (!canRead) {
       return res.status(403).json({ error: "Access denied" });
     }
@@ -740,7 +770,7 @@ export const listFileActivity = async (req, res) => {
       const canRead =
         isAdmin ||
         fileRecord.uploaded_by.toString() === userId.toString() ||
-        hasFileAccessSnapshot(fileRecord, userId, user?.department);
+        hasFileAccessSnapshot(fileRecord, userId);
 
       if (!canRead) continue;
 
@@ -784,11 +814,10 @@ export const askFileQuestion = async (req, res) => {
       return res.status(400).json({ error: "question is required" });
     }
 
-    const user = await User.findById(userId).select("department");
     const fileRecord = await File.findById(fileId);
     if (!fileRecord) return res.status(404).json({ error: "File not found" });
 
-    if (!fileRecord.hasAccess(userId, user?.department)) {
+    if (!fileRecord.hasAccess(userId)) {
       return res.status(403).json({ error: "Access denied" });
     }
 
@@ -860,7 +889,7 @@ export const summarizeFileContent = async (req, res) => {
     const fileRecord = await File.findById(fileId);
     if (!fileRecord) return res.status(404).json({ error: "File not found" });
 
-    if (!fileRecord.hasAccess(userId, user?.department)) {
+    if (!fileRecord.hasAccess(userId)) {
       return res.status(403).json({ error: "Access denied" });
     }
 
@@ -945,11 +974,10 @@ export const toggleFileFavorite = async (req, res) => {
     const userId = req.userId;
     const requested = req.body?.favorite;
 
-    const user = await User.findById(userId).select("department");
     const fileRecord = await File.findById(fileId);
     if (!fileRecord) return res.status(404).json({ error: "File not found" });
 
-    if (!fileRecord.hasAccess(userId, user?.department)) {
+    if (!fileRecord.hasAccess(userId)) {
       return res.status(403).json({ error: "Access denied" });
     }
 
@@ -979,11 +1007,11 @@ export const restoreFileVersion = async (req, res) => {
     const { fileId, versionNumber } = req.params;
     const userId = req.userId;
 
-    const user = await User.findById(userId).select("department user_type");
+    const user = await User.findById(userId).select("user_type");
     const fileRecord = await File.findById(fileId);
     if (!fileRecord) return res.status(404).json({ error: "File not found" });
 
-    const canRestore = canEditFile(fileRecord, userId, user?.department) || isAdminUser(user);
+    const canRestore = canEditFile(fileRecord, userId) || isAdminUser(user);
     if (!canRestore) {
       return res.status(403).json({ error: "Only owner/editor can restore versions" });
     }
@@ -1017,5 +1045,177 @@ export const restoreFileVersion = async (req, res) => {
   } catch (error) {
     console.error("Error restoring file version:", error);
     return res.status(500).json({ error: "Failed to restore file version" });
+  }
+};
+
+// ─────────────────────────────────────────────
+// Add comment to file
+// POST /api/files/:fileId/comments
+// ─────────────────────────────────────────────
+export const addFileComment = async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    const { content } = req.body;
+    const userId = req.userId;
+
+    if (!content?.trim()) {
+      return res.status(400).json({ error: "Comment content is required" });
+    }
+
+    if (content.trim().length > 2000) {
+      return res.status(400).json({ error: "Comment too long (max 2000 characters)" });
+    }
+
+    const fileRecord = await File.findById(fileId);
+    if (!fileRecord) return res.status(404).json({ error: "File not found" });
+
+    if (!fileRecord.hasAccess(userId)) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const comment = {
+      user_id: userId,
+      content: content.trim(),
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+
+    fileRecord.comments = fileRecord.comments || [];
+    fileRecord.comments.push(comment);
+    await fileRecord.save();
+
+    // Populate user info for response
+    await fileRecord.populate("comments.user_id", "first_name last_name email");
+    const addedComment = fileRecord.comments[fileRecord.comments.length - 1];
+
+    return res.status(201).json({
+      message: "Comment added",
+      comment: addedComment,
+    });
+  } catch (error) {
+    console.error("Error adding comment:", error);
+    return res.status(500).json({ error: "Failed to add comment" });
+  }
+};
+
+// ─────────────────────────────────────────────
+// Get file comments
+// GET /api/files/:fileId/comments
+// ─────────────────────────────────────────────
+export const getFileComments = async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    const userId = req.userId;
+
+    const fileRecord = await File.findById(fileId)
+      .populate("comments.user_id", "first_name last_name email profile_picture");
+
+    if (!fileRecord) return res.status(404).json({ error: "File not found" });
+
+    if (!fileRecord.hasAccess(userId)) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    return res.status(200).json({
+      file_id: fileRecord._id,
+      file_name: fileRecord.file_name,
+      total_comments: (fileRecord.comments || []).length,
+      comments: (fileRecord.comments || []).map((c) => ({
+        _id: c._id,
+        user_id: c.user_id?._id,
+        user_name: c.user_id?.first_name
+          ? `${c.user_id.first_name} ${c.user_id.last_name || ""}`.trim()
+          : "Unknown",
+        user_email: c.user_id?.email || "",
+        user_profile_picture: c.user_id?.profile_picture || "",
+        content: c.content,
+        created_at: c.created_at,
+        updated_at: c.updated_at,
+      })),
+    });
+  } catch (error) {
+    console.error("Error fetching comments:", error);
+    return res.status(500).json({ error: "Failed to fetch comments" });
+  }
+};
+
+// ─────────────────────────────────────────────
+// Update comment
+// PATCH /api/files/:fileId/comments/:commentId
+// ─────────────────────────────────────────────
+export const updateFileComment = async (req, res) => {
+  try {
+    const { fileId, commentId } = req.params;
+    const { content } = req.body;
+    const userId = req.userId;
+
+    if (!content?.trim()) {
+      return res.status(400).json({ error: "Comment content is required" });
+    }
+
+    if (content.trim().length > 2000) {
+      return res.status(400).json({ error: "Comment too long (max 2000 characters)" });
+    }
+
+    const fileRecord = await File.findById(fileId);
+    if (!fileRecord) return res.status(404).json({ error: "File not found" });
+
+    const comment = fileRecord.comments?.id(commentId);
+    if (!comment) return res.status(404).json({ error: "Comment not found" });
+
+    // Only comment author can edit their own comment
+    if (comment.user_id.toString() !== userId.toString()) {
+      return res.status(403).json({ error: "You can only edit your own comments" });
+    }
+
+    comment.content = content.trim();
+    comment.updated_at = new Date();
+    await fileRecord.save();
+
+    await fileRecord.populate("comments.user_id", "first_name last_name email");
+    const updatedComment = fileRecord.comments.id(commentId);
+
+    return res.status(200).json({
+      message: "Comment updated",
+      comment: updatedComment,
+    });
+  } catch (error) {
+    console.error("Error updating comment:", error);
+    return res.status(500).json({ error: "Failed to update comment" });
+  }
+};
+
+// ─────────────────────────────────────────────
+// Delete comment
+// DELETE /api/files/:fileId/comments/:commentId
+// ─────────────────────────────────────────────
+export const deleteFileComment = async (req, res) => {
+  try {
+    const { fileId, commentId } = req.params;
+    const userId = req.userId;
+
+    const user = await User.findById(userId).select("user_type");
+    const fileRecord = await File.findById(fileId);
+    if (!fileRecord) return res.status(404).json({ error: "File not found" });
+
+    const comment = fileRecord.comments?.id(commentId);
+    if (!comment) return res.status(404).json({ error: "Comment not found" });
+
+    // Only comment author or file owner or admin can delete
+    const isCommentAuthor = comment.user_id.toString() === userId.toString();
+    const isFileOwner = fileRecord.uploaded_by.toString() === userId.toString();
+    const isAdmin = isAdminUser(user);
+
+    if (!isCommentAuthor && !isFileOwner && !isAdmin) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    comment.remove();
+    await fileRecord.save();
+
+    return res.status(200).json({ message: "Comment deleted" });
+  } catch (error) {
+    console.error("Error deleting comment:", error);
+    return res.status(500).json({ error: "Failed to delete comment" });
   }
 };

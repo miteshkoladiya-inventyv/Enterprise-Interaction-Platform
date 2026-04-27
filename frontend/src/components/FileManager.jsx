@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import axios from "axios";
 import {
   Upload,
@@ -27,6 +27,8 @@ import {
   BarChart3,
   RotateCcw,
   Star,
+  Pencil,
+  MessageCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { BACKEND_URL } from "@/config";
@@ -849,6 +851,277 @@ function AISummaryModal({ open, onClose, file }) {
   );
 }
 
+// ─── Rename Modal ────────────────────────────────────────────
+function RenameModal({ open, onClose, file, onRenamed }) {
+  const [newName, setNewName] = useState("");
+  const [renaming, setRenaming] = useState(false);
+
+  useEffect(() => {
+    if (open && file) {
+      setNewName(file.file_name || "");
+    }
+  }, [open, file]);
+
+  const handleRename = async () => {
+    if (!newName.trim() || !file?._id) return;
+    setRenaming(true);
+    try {
+      await axios.patch(
+        `${BACKEND_URL}/files/${file._id}`,
+        { file_name: newName.trim() },
+        axiosConfig()
+      );
+      toast.success("File renamed successfully");
+      onRenamed?.();
+      onClose();
+    } catch (err) {
+      toast.error(err.response?.data?.error || "Failed to rename file");
+    } finally {
+      setRenaming(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100 max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-zinc-100 flex items-center gap-2">
+            <Pencil className="size-4 text-indigo-400" /> Rename File
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 mt-2">
+          <div>
+            <label className="text-xs text-zinc-500 mb-1 block">New file name</label>
+            <Input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && !renaming && handleRename()}
+              placeholder="Enter new file name..."
+              className="bg-zinc-800 border-zinc-700 text-zinc-200"
+              autoFocus
+            />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 mt-4">
+          <Button variant="ghost" onClick={onClose} className="text-zinc-400 hover:text-zinc-200">
+            Cancel
+          </Button>
+          <Button
+            onClick={handleRename}
+            disabled={renaming || !newName.trim() || newName.trim() === file?.file_name}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white"
+          >
+            {renaming ? <Loader2 className="size-4 animate-spin mr-2" /> : <Pencil className="size-4 mr-2" />}
+            {renaming ? "Renaming..." : "Rename"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Comments Modal ──────────────────────────────────────────
+function CommentsModal({ open, onClose, file }) {
+  const [comments, setComments] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [newComment, setNewComment] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editContent, setEditContent] = useState("");
+
+  const userData = JSON.parse(localStorage.getItem("user") || "{}");
+  const userId = userData?._id || userData?.id;
+
+  useEffect(() => {
+    if (open && file) {
+      fetchComments();
+    }
+  }, [open, file]);
+
+  const fetchComments = async () => {
+    if (!file?._id) return;
+    setLoading(true);
+    try {
+      const res = await axios.get(`${BACKEND_URL}/files/${file._id}/comments`, axiosConfig());
+      setComments(res.data?.comments || []);
+    } catch (err) {
+      toast.error("Failed to load comments");
+      setComments([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAddComment = async () => {
+    if (!newComment.trim()) return;
+    setAdding(true);
+    try {
+      await axios.post(
+        `${BACKEND_URL}/files/${file._id}/comments`,
+        { content: newComment.trim() },
+        axiosConfig()
+      );
+      toast.success("Comment added");
+      setNewComment("");
+      fetchComments();
+    } catch (err) {
+      toast.error(err.response?.data?.error || "Failed to add comment");
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const handleUpdateComment = async (commentId) => {
+    if (!editContent.trim()) return;
+    try {
+      await axios.patch(
+        `${BACKEND_URL}/files/${file._id}/comments/${commentId}`,
+        { content: editContent.trim() },
+        axiosConfig()
+      );
+      toast.success("Comment updated");
+      setEditingId(null);
+      setEditContent("");
+      fetchComments();
+    } catch (err) {
+      toast.error(err.response?.data?.error || "Failed to update comment");
+    }
+  };
+
+  const handleDeleteComment = async (commentId) => {
+    if (!confirm("Delete this comment?")) return;
+    try {
+      await axios.delete(
+        `${BACKEND_URL}/files/${file._id}/comments/${commentId}`,
+        axiosConfig()
+      );
+      toast.success("Comment deleted");
+      fetchComments();
+    } catch (err) {
+      toast.error(err.response?.data?.error || "Failed to delete comment");
+    }
+  };
+
+  const startEdit = (comment) => {
+    setEditingId(comment._id);
+    setEditContent(comment.content);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100 max-w-2xl max-h-[80vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="text-zinc-100 flex items-center gap-2">
+            <MessageSquare className="size-4 text-indigo-400" /> Comments
+          </DialogTitle>
+        </DialogHeader>
+        <p className="text-xs text-zinc-500 -mt-2">Comments on "{file?.file_name}"</p>
+
+        {/* Add new comment */}
+        <div className="flex gap-2 mt-2">
+          <Input
+            value={newComment}
+            onChange={(e) => setNewComment(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && !adding && handleAddComment()}
+            placeholder="Write a comment..."
+            className="bg-zinc-800 border-zinc-700 text-zinc-200 flex-1"
+            maxLength={2000}
+          />
+          <Button
+            onClick={handleAddComment}
+            disabled={adding || !newComment.trim()}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white"
+          >
+            {adding ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+          </Button>
+        </div>
+
+        {/* Comments list */}
+        <div className="flex-1 overflow-y-auto space-y-3 mt-4">
+          {loading && (
+            <div className="text-center py-8">
+              <Loader2 className="size-6 animate-spin text-zinc-500 mx-auto" />
+            </div>
+          )}
+          {!loading && comments.length === 0 && (
+            <div className="text-center py-8 text-zinc-500 text-sm">
+              No comments yet. Be the first to comment!
+            </div>
+          )}
+          {!loading && comments.map((comment) => {
+            const isOwn = comment.user_id === userId;
+            const isEditing = editingId === comment._id;
+
+            return (
+              <div key={comment._id} className="bg-zinc-800/50 rounded-lg p-3 border border-zinc-800">
+                <div className="flex items-start justify-between mb-2">
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-zinc-200">{comment.user_name}</p>
+                    <p className="text-xs text-zinc-500">{timeAgo(comment.created_at)}</p>
+                  </div>
+                  {isOwn && !isEditing && (
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => startEdit(comment)}
+                        className="p-1 rounded hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200"
+                        title="Edit"
+                      >
+                        <Pencil className="size-3" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteComment(comment._id)}
+                        className="p-1 rounded hover:bg-zinc-700 text-red-400 hover:text-red-300"
+                        title="Delete"
+                      >
+                        <Trash2 className="size-3" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {isEditing ? (
+                  <div className="space-y-2">
+                    <Input
+                      value={editContent}
+                      onChange={(e) => setEditContent(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleUpdateComment(comment._id);
+                        if (e.key === "Escape") { setEditingId(null); setEditContent(""); }
+                      }}
+                      className="bg-zinc-900 border-zinc-700 text-zinc-200 text-sm"
+                      maxLength={2000}
+                      autoFocus
+                    />
+                    <div className="flex gap-2 justify-end">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => { setEditingId(null); setEditContent(""); }}
+                        className="text-zinc-400"
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => handleUpdateComment(comment._id)}
+                        disabled={!editContent.trim()}
+                        className="bg-indigo-600 hover:bg-indigo-700"
+                      >
+                        Save
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-zinc-300 whitespace-pre-wrap">{comment.content}</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Activity Dashboard ────────────────────────────────────────
 function ActivityDashboard() {
   const [events, setEvents] = useState([]);
@@ -992,11 +1265,18 @@ export default function FileManager() {
   const [linkFile, setLinkFile] = useState(null);
   const [versionsFile, setVersionsFile] = useState(null);
   const [activityFile, setActivityFile] = useState(null);
+  const [renameFile, setRenameFile] = useState(null);
+  const [commentsFile, setCommentsFile] = useState(null);
 
   const userData = JSON.parse(localStorage.getItem("user") || "{}");
   const userId = userData?._id || userData?.id;
   const [askFile, setAskFile] = useState(null);
   const [summaryFile, setSummaryFile] = useState(null);
+
+  // Memoize headers to prevent unnecessary re-renders
+  const headers = useMemo(() => ({
+    headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
+  }), []);
 
   const getMyRole = (file) => {
     if (!file || !userId) return null;
@@ -1015,10 +1295,11 @@ export default function FileManager() {
   const fetchFiles = async () => {
     setLoading(true);
     try {
-      const res = await axios.get(`${BACKEND_URL}/files`, axiosConfig());
+      const res = await axios.get(`${BACKEND_URL}/files`, headers);
       setFiles(res.data || []);
     } catch (err) {
       console.error("Failed to fetch files:", err);
+      setFiles([]);
     } finally {
       setLoading(false);
     }
@@ -1213,6 +1494,8 @@ export default function FileManager() {
                 onSummary={() => setSummaryFile(f)}
                 onToggleFavorite={() => handleFavoriteToggle(f)}
                 isFavorited={isFavorited(f)}
+                onRename={() => setRenameFile(f)}
+                onComments={() => setCommentsFile(f)}
               />
             ))}
           </div>
@@ -1243,6 +1526,8 @@ export default function FileManager() {
                 onSummary={() => setSummaryFile(f)}
                 onToggleFavorite={() => handleFavoriteToggle(f)}
                 isFavorited={isFavorited(f)}
+                onRename={() => setRenameFile(f)}
+                onComments={() => setCommentsFile(f)}
               />
             ))}
           </div>
@@ -1264,12 +1549,14 @@ export default function FileManager() {
       <ActivityModal open={!!activityFile} onClose={() => setActivityFile(null)} file={activityFile} />
       <AskAIModal open={!!askFile} onClose={() => setAskFile(null)} file={askFile} />
       <AISummaryModal open={!!summaryFile} onClose={() => setSummaryFile(null)} file={summaryFile} />
+      <RenameModal open={!!renameFile} onClose={() => setRenameFile(null)} file={renameFile} onRenamed={fetchFiles} />
+      <CommentsModal open={!!commentsFile} onClose={() => setCommentsFile(null)} file={commentsFile} />
     </div>
   );
 }
 
 // ─── Grid Card ───────────────────────────────────────────────
-function FileCard({ file, isMine, myRole, onPreview, onDownload, onDelete, onShare, onCreateLink, onVersions, onActivity, onAsk, onSummary, onToggleFavorite, isFavorited }) {
+function FileCard({ file, isMine, myRole, onPreview, onDownload, onDelete, onShare, onCreateLink, onVersions, onActivity, onAsk, onSummary, onToggleFavorite, isFavorited, onRename, onComments }) {
   return (
     <div className="group bg-zinc-900/70 border border-zinc-800/60 rounded-xl overflow-hidden hover:border-zinc-700 hover:shadow-lg hover:shadow-black/20 transition-all cursor-pointer">
       {/* Thumbnail area */}
@@ -1327,6 +1614,9 @@ function FileCard({ file, isMine, myRole, onPreview, onDownload, onDelete, onSha
               <DropdownMenuItem onClick={onActivity} className="text-zinc-300 focus:bg-zinc-800 focus:text-zinc-100">
                 <Tag className="size-4 mr-2" /> Activity
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={onComments} className="text-zinc-300 focus:bg-zinc-800 focus:text-zinc-100">
+                <MessageCircle className="size-4 mr-2" /> Comments
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={onSummary} className="text-zinc-300 focus:bg-zinc-800 focus:text-zinc-100">
                 <FileText className="size-4 mr-2" /> AI Summary
               </DropdownMenuItem>
@@ -1335,6 +1625,9 @@ function FileCard({ file, isMine, myRole, onPreview, onDownload, onDelete, onSha
               </DropdownMenuItem>
               {isMine && (
                 <>
+                  <DropdownMenuItem onClick={onRename} className="text-zinc-300 focus:bg-zinc-800 focus:text-zinc-100">
+                    <Pencil className="size-4 mr-2" /> Rename
+                  </DropdownMenuItem>
                   <DropdownMenuItem onClick={onShare} className="text-zinc-300 focus:bg-zinc-800 focus:text-zinc-100">
                     <Share2 className="size-4 mr-2" /> Share
                   </DropdownMenuItem>
@@ -1385,7 +1678,7 @@ function FileCard({ file, isMine, myRole, onPreview, onDownload, onDelete, onSha
 }
 
 // ─── List Row ────────────────────────────────────────────────
-function FileRow({ file, isMine, myRole, onPreview, onDownload, onDelete, onShare, onCreateLink, onVersions, onActivity, onAsk, onSummary, onToggleFavorite, isFavorited }) {
+function FileRow({ file, isMine, myRole, onPreview, onDownload, onDelete, onShare, onCreateLink, onVersions, onActivity, onAsk, onSummary, onToggleFavorite, isFavorited, onRename, onComments }) {
   return (
     <div
       className="grid grid-cols-[1fr_120px_120px_100px_40px] gap-3 items-center px-4 py-2.5 rounded-lg hover:bg-zinc-900/70 cursor-pointer group"
@@ -1452,6 +1745,9 @@ function FileRow({ file, isMine, myRole, onPreview, onDownload, onDelete, onShar
           <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onActivity(); }} className="text-zinc-300 focus:bg-zinc-800 focus:text-zinc-100">
             <Tag className="size-4 mr-2" /> Activity
           </DropdownMenuItem>
+          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onComments(); }} className="text-zinc-300 focus:bg-zinc-800 focus:text-zinc-100">
+            <MessageCircle className="size-4 mr-2" /> Comments
+          </DropdownMenuItem>
           <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onSummary(); }} className="text-zinc-300 focus:bg-zinc-800 focus:text-zinc-100">
             <FileText className="size-4 mr-2" /> AI Summary
           </DropdownMenuItem>
@@ -1460,6 +1756,9 @@ function FileRow({ file, isMine, myRole, onPreview, onDownload, onDelete, onShar
           </DropdownMenuItem>
           {isMine && (
             <>
+              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onRename(); }} className="text-zinc-300 focus:bg-zinc-800 focus:text-zinc-100">
+                <Pencil className="size-4 mr-2" /> Rename
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onShare(); }} className="text-zinc-300 focus:bg-zinc-800 focus:text-zinc-100">
                 <Share2 className="size-4 mr-2" /> Share
               </DropdownMenuItem>

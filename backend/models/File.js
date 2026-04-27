@@ -41,10 +41,6 @@ const filePermissionsSchema = new Schema({
     ref: 'User'
   }],
   shared_with: [fileShareMemberSchema],
-  department: {
-    type: String,
-    default: null
-  },
   is_public: {
     type: Boolean,
     default: false
@@ -111,6 +107,27 @@ const favoriteEntrySchema = new Schema({
     default: Date.now
   }
 }, { _id: false });
+
+const fileCommentSchema = new Schema({
+  user_id: {
+    type: Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  content: {
+    type: String,
+    required: true,
+    maxlength: 2000
+  },
+  created_at: {
+    type: Date,
+    default: Date.now
+  },
+  updated_at: {
+    type: Date,
+    default: Date.now
+  }
+});
 
 const fileMetadataSchema = new Schema({
   description: {
@@ -193,12 +210,6 @@ const fileSchema = new Schema({
     type: uploaderInfoSchema,
     required: true
   },
-  country: {
-    type: String,
-    enum: ['germany', 'india', 'usa'],
-    required: true,
-    index: true
-  },
   permissions: {
     type: filePermissionsSchema,
     required: true
@@ -210,6 +221,22 @@ const fileSchema = new Schema({
   },
   secure_links: [secureLinkSchema],
   favorites: [favoriteEntrySchema],
+  comments: [fileCommentSchema],
+  // Trash / Soft delete fields
+  is_deleted: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  deleted_at: {
+    type: Date,
+    default: null
+  },
+  deleted_by: {
+    type: Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
   created_at: {
     type: Date,
     default: Date.now,
@@ -227,14 +254,13 @@ const fileSchema = new Schema({
 // Indexes
 fileSchema.index({ 'permissions.user_ids': 1 });
 fileSchema.index({ 'permissions.shared_with.user_id': 1 });
-fileSchema.index({ 'permissions.department': 1 });
 fileSchema.index({ 'secure_links.token': 1 });
 fileSchema.index({ 'favorites.user_id': 1 });
 fileSchema.index({ uploaded_by: 1, created_at: -1 });
-fileSchema.index({ country: 1, created_at: -1 });
+fileSchema.index({ is_deleted: 1, deleted_at: 1 });
 
 // Instance methods
-fileSchema.methods.hasAccess = function(userId, userDepartment) {
+fileSchema.methods.hasAccess = function(userId) {
   // Public files
   if (this.permissions.is_public) {
     return true;
@@ -255,11 +281,6 @@ fileSchema.methods.hasAccess = function(userId, userDepartment) {
     return true;
   }
 
-  // Check department permissions
-  if (this.permissions.department && this.permissions.department === userDepartment) {
-    return true;
-  }
-
   return false;
 };
 
@@ -271,7 +292,7 @@ fileSchema.methods.logActivity = function(userId, action, ipAddress = null) {
   });
 };
 
-fileSchema.methods.getPermissionRole = function(userId, userDepartment = null) {
+fileSchema.methods.getPermissionRole = function(userId) {
   const normalizedUserId = userId?.toString();
   if (!normalizedUserId) return null;
 
@@ -291,10 +312,6 @@ fileSchema.methods.getPermissionRole = function(userId, userDepartment = null) {
   }
 
   if (this.permissions.is_public) {
-    return 'viewer';
-  }
-
-  if (this.permissions.department && userDepartment && this.permissions.department === userDepartment) {
     return 'viewer';
   }
 
@@ -382,7 +399,7 @@ fileSchema.methods.setFavoriteForUser = function(userId, enabled) {
 
 
 // Static methods
-fileSchema.statics.findAccessibleFiles = function(userId, userDepartment) {
+fileSchema.statics.findAccessibleFiles = function(userId, includeDeleted = false) {
   const accessQuery = [
     { 'permissions.is_public': true },
     { uploaded_by: userId },
@@ -390,17 +407,22 @@ fileSchema.statics.findAccessibleFiles = function(userId, userDepartment) {
     { 'permissions.shared_with.user_id': userId }
   ];
 
-  if (userDepartment) {
-    accessQuery.push({ 'permissions.department': userDepartment });
+  const baseQuery = { $or: accessQuery };
+  
+  // By default, exclude deleted files
+  if (!includeDeleted) {
+    baseQuery.is_deleted = { $ne: true };
   }
 
-  return this.find({ $or: accessQuery }).sort({ created_at: -1 });
+  return this.find(baseQuery).sort({ created_at: -1 });
 };
 
-fileSchema.statics.findByDepartment = function(department) {
+// Find files in trash for a specific user (owner only sees their deleted files)
+fileSchema.statics.findTrashFiles = function(userId) {
   return this.find({
-    'permissions.department': department
-  }).sort({ created_at: -1 });
+    uploaded_by: userId,
+    is_deleted: true
+  }).sort({ deleted_at: -1 });
 };
 
 const File = model("File", fileSchema);

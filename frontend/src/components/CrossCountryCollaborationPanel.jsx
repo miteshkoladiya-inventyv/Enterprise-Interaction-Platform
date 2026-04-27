@@ -906,7 +906,7 @@ export default function CrossCountryCollaborationPanel() {
                                       ? "Live overlap"
                                       : "Async handoff"}
                                   </span>
-                                  <button
+                                  {/* <button
                                     type="button"
                                     onClick={() =>
                                       copyText(
@@ -918,7 +918,7 @@ export default function CrossCountryCollaborationPanel() {
                                   >
                                     <Copy className="size-3.5" />
                                     Copy overlap
-                                  </button>
+                                  </button> */}
                                 </div>
                               </article>
                             );
