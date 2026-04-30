@@ -16,7 +16,7 @@ import {
   Trash2,
   Loader2,
 } from "lucide-react";
-import { BACKEND_URL } from "@/config";
+import { BACKEND_URL } from "@/config.js";
 import { toast } from "sonner";
 import ImageCropModal from "@/components/ImageCropModal";
 
