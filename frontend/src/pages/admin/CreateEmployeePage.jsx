@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { UserPlus, AlertCircle, Loader2, Info } from "lucide-react";
-import { BACKEND_URL } from "@/config";
+//import { BACKEND_URL } from "@/config";
+import { BACKEND_URL } from "@/config.js";
 import axios from "axios";
 import { toast } from "sonner";
 

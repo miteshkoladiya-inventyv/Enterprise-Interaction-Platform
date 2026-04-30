@@ -19,7 +19,8 @@ import {
   Lock,
   CheckCircle2,
 } from "lucide-react";
-import { BACKEND_URL } from "@/config";
+//import { BACKEND_URL } from "@/config";
+import { BACKEND_URL } from "@/config.js";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";

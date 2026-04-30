@@ -7,7 +7,8 @@ import {
   Loader2,
   Key,
 } from "lucide-react";
-import { BACKEND_URL } from "@/config";
+// import { BACKEND_URL } from "@/config";
+import { BACKEND_URL } from "@/config.js";
 import { toast } from "sonner";
 import axios from "axios";
 

@@ -20,7 +20,8 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BACKEND_URL } from "@/config";
+//import { BACKEND_URL } from "@/config";
+import { BACKEND_URL } from "@/config.js";
 
 const getAuthHeaders = () => ({
   Authorization: `Bearer ${localStorage.getItem("token")}`,

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
 import axios from "axios";
-import { BACKEND_URL } from "@/config";
+//import { BACKEND_URL } from "@/config";
+import { BACKEND_URL } from "@/config.js";
 
 const AdminProtectedRoute = ({ children }) => {
   const [status, setStatus] = useState("checking"); // "checking" | "valid" | "invalid"

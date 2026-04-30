@@ -619,7 +619,8 @@ import {
 import { useAuthContext } from "../context/AuthContextProvider";
 import { toast } from "sonner";
 import axios from "axios";
-import { BACKEND_URL } from "@/config";
+//import { BACKEND_URL } from "@/config";
+import { BACKEND_URL } from "@/config.js";
 
 const ChannelSettingsModal = ({
   show,
