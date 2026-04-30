@@ -2,8 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { X, Search, Loader2, UserPlus, Users } from "lucide-react";
 import axios from "axios";
 import { toast } from "sonner";
-//import { BACKEND_URL } from "@/config";
-import { BACKEND_URL } from "@/config.js";
+import { BACKEND_URL } from "@/config";
 
 /**
  * Modal to search and invite participants to an ongoing call

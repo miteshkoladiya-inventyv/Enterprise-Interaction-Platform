@@ -11,8 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { toast } from "sonner";
-//import { BACKEND_URL } from "@/config";
-import { BACKEND_URL } from "@/config.js";
+import { BACKEND_URL } from "@/config";
 
 const FileUploadModal = ({ show, onClose, selectedChat, onFileSent }) => {
   const [selectedFile, setSelectedFile] = useState(null);

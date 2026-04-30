@@ -54,8 +54,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-//import { BACKEND_URL } from "@/config";
-import { BACKEND_URL } from "@/config.js";
+import { BACKEND_URL } from "@/config";
 
 const EMPLOYEE_TYPES = [
   { value: "internal_team", label: "Internal Team" },

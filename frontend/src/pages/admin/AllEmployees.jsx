@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-// import { BACKEND_URL } from "@/config"; 
-import { BACKEND_URL } from "@/config.js";
+import { BACKEND_URL } from "@/config";
 import { Search, Users, Loader2 } from "lucide-react";
 
 const AllEmployees = () => {

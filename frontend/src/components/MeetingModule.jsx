@@ -52,8 +52,7 @@ import {
 } from "lucide-react";
 import axios from "axios";
 import { toast } from "sonner";
-//import { BACKEND_URL } from "@/config";
-import { BACKEND_URL } from "@/config.js";
+import { BACKEND_URL } from "@/config";
 import { useAuthContext } from "../context/AuthContextProvider";
 import { useMeetingCall } from "@/hooks/useMeetingCall";
 

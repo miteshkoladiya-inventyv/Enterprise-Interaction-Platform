@@ -16,8 +16,7 @@ import {
   Users,
 } from "lucide-react";
 import { toast } from "sonner";
-//import { BACKEND_URL } from "@/config";
-import { BACKEND_URL } from "@/config.js";
+import { BACKEND_URL } from "@/config";
 
 const flagTone = {
   enabled: "border-emerald-500/20 bg-emerald-500/10 text-emerald-300",

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import axios from "axios";
-import { BACKEND_URL } from "@/config.js";
+import { BACKEND_URL } from "@/config";
 import {
   Loader2,
   Download,

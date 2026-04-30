@@ -33,8 +33,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-//import { BACKEND_URL } from "@/config";
-import { BACKEND_URL } from "@/config.js";
+import { BACKEND_URL } from "@/config";
 
 const getAuthHeaders = () => ({
   Authorization: `Bearer ${localStorage.getItem("token")}`,

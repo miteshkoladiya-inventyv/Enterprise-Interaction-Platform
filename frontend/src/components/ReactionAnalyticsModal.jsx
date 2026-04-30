@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
-// import { BACKEND_URL } from "@/config";
-import { BACKEND_URL } from "@/config.js";
+import { BACKEND_URL } from "@/config";
 import { X } from "lucide-react";
 
 const ReactionAnalyticsModal = ({ messageId, channelId, isOpen, onClose }) => {

@@ -1,7 +1,6 @@
 // hooks/useSocket.js
 import { io } from "socket.io-client";
-// import { BACKEND_URL } from "@/config";
-import { BACKEND_URL } from "@/config.js";
+import { BACKEND_URL } from "@/config";
 
 export const createSocketConnection = (userId, onNotificationReceived) => {
   if (!userId) return null;

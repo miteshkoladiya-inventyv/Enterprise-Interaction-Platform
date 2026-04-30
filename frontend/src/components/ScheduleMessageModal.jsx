@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import axios from "axios";
-// import { BACKEND_URL } from "@/config";
-import { BACKEND_URL } from "@/config.js";
+import { BACKEND_URL } from "@/config";
 import { Clock, X } from "lucide-react";
 import { toast } from "sonner";
 

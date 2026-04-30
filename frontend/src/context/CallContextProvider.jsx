@@ -10,8 +10,7 @@ import OutgoingCallModal from "../components/OutgoingCallModal";
 import OutgoingVideoCallModal from "../components/OutgoingVideoCallModal";
 import ActiveCallBar from "../components/ActiveCallBar";
 import ActiveVideoCallBar from "../components/ActiveVideoCallBar";
-// import { BACKEND_URL } from "@/config";
-import { BACKEND_URL } from "@/config.js";
+import { BACKEND_URL } from "@/config";
 
 const CallContext = createContext(null);
 
